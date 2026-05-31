@@ -38,6 +38,10 @@ class CFOPAnalyzer:
             if color not in (bottom_color, top_color)
         ]
 
+        original_level = log.level if log else None
+        if log:
+            log.setLevel(max(log.level, 30))
+
         scored = []
         for front_color in candidates:
             analyzer = cls(scramble, solution, top_color, front_color)
@@ -45,6 +49,9 @@ class CFOPAnalyzer:
             analyzer.auto_front_candidates = candidates
             score = analyzer._score_auto_front()
             scored.append((score, analyzer))
+
+        if log and original_level is not None:
+            log.setLevel(original_level)
 
         scored.sort(key=lambda item: item[0], reverse=True)
         best_score, best_analyzer = scored[0]
@@ -64,21 +71,14 @@ class CFOPAnalyzer:
         return best_analyzer
 
     def __init__(self, scramble: str, solution: str, top_color: str = 'W', front_color: str = 'G'):
-        log.info(f"[CFOPAnalyzer] 初始化分析器")
-        log.info(f"[CFOPAnalyzer] 输入参数: top_color={top_color}, front_color={front_color}")
-        
         orientation_error = validate_orientation(top_color, front_color)
         if orientation_error:
             raise ValueError(orientation_error)
         
-        log.info(f"[CFOPAnalyzer] 打乱公式原文: {scramble}")
-        log.info(f"[CFOPAnalyzer] 还原步骤原文: {solution[:200]}{'...' if len(solution) > 200 else ''}")
-        
         self.scramble = parse_moves(scramble)
         self.solution = parse_timed_moves(solution)
-        log.info(f"[CFOPAnalyzer] 解析后打乱步骤({len(self.scramble)}步): {' '.join(self.scramble)}")
         parsed_moves = [m for m, _ in self.solution]
-        log.info(f"[CFOPAnalyzer] 解析后还原步骤({len(parsed_moves)}步): {' '.join(parsed_moves)}")
+        log.info(f"[CFOPAnalyzer] 初始化: 打乱={len(self.scramble)}步, 还原={len(parsed_moves)}步, 朝向={top_color}{front_color}")
         
         self.cube = Cube()
         self.top_color = top_color
@@ -89,12 +89,12 @@ class CFOPAnalyzer:
         self.auto_front_candidates = []
         
         self.rotations = get_rotation_for_orientation(top_color, front_color)
-        log.info(f"[CFOPAnalyzer] 朝向旋转序列: {self.rotations if self.rotations else '(无旋转，白顶绿前)'}")
+        log.debug(f"[CFOPAnalyzer] 朝向旋转序列: {self.rotations if self.rotations else '(无旋转，白顶绿前)'}")
         
         self.analysis_view_map = self._build_analysis_view_map()
         self.output_mapping = self._build_output_mapping()
-        log.info(f"[CFOPAnalyzer] CFOP判定观察view_map: {self.analysis_view_map}")
-        log.info(f"[CFOPAnalyzer] 输出步骤映射表: {self.output_mapping}")
+        log.debug(f"[CFOPAnalyzer] CFOP判定观察view_map: {self.analysis_view_map}")
+        log.debug(f"[CFOPAnalyzer] 输出步骤映射表: {self.output_mapping}")
 
         self._apply_scramble()
         
@@ -108,15 +108,9 @@ class CFOPAnalyzer:
         self._analyze_result = None
     
     def _apply_scramble(self):
-        """将打乱公式按固定白顶绿前坐标系应用到魔方"""
-        log.info(f"[CFOPAnalyzer] 开始应用打乱步骤...")
         for move in self.scramble:
             self.cube.apply_standard_move(move)
-        log.info(f"[CFOPAnalyzer] 打乱步骤应用完成")
-
         self.cube.view_map = self.analysis_view_map.copy()
-        
-        # log.info(f"[CFOPAnalyzer] 当前复原色定义: {self.cube.solved_colors}")
 
     def _build_analysis_view_map(self) -> Dict[str, str]:
         view_cube = Cube()
@@ -186,10 +180,8 @@ class CFOPAnalyzer:
         if self._analyze_result is not None:
             return self._analyze_result
         
-        log.info(f"[CFOPAnalyzer] ========== 开始阶段分析 ==========")
-        
         mapped_solution = [self._map_move(m) for m, _ in self.solution]
-        log.info(f"[CFOPAnalyzer] 输出视角下的还原步骤({len(mapped_solution)}步): {' '.join(mapped_solution)}")
+        log.debug(f"[CFOPAnalyzer] 还原步骤({len(mapped_solution)}步): {' '.join(mapped_solution)}")
         
         cube = self.cube.copy()
         cross_done = False
@@ -216,14 +208,11 @@ class CFOPAnalyzer:
             current_moves.append(mapped_move)
             current_timed_moves.append((mapped_move, timestamp))
             
-            if step_count <= 25:
-                log.debug(f"[CFOPAnalyzer] 步骤{step_count}: 输入={original_move}, 映射={mapped_move}, 当前阶段={current_phase}")
-            
             if current_phase == "cross" and cube.is_cross_solved():
                 self.cross_moves = current_moves.copy()
                 self.phase_timestamps["cross"]["end"] = timestamp
                 self.phase_timed_moves["cross"] = current_timed_moves.copy()
-                log.info(f"[CFOPAnalyzer] ✓ Cross完成! 步数={len(self.cross_moves)}, 步骤={' '.join(self.cross_moves)}")
+                log.info(f"[CFOPAnalyzer] Cross完成: {len(self.cross_moves)}步")
                 current_moves = []
                 current_timed_moves = []
                 current_phase = "f2l"
@@ -252,8 +241,7 @@ class CFOPAnalyzer:
                     f2l_num = len(completed_f2l_slots)  # 第几个完成的F2L（1-based）
                     slot_names = {1: 'FR', 2: 'FL', 3: 'BL', 4: 'BR'}
 
-                    log.info(f"[CFOPAnalyzer] ✓ F2L-{f2l_num}({slot_names[slot_found]})完成! "
-                            f"步数={len(current_moves)}, 步骤={' '.join(current_moves)}")
+                    log.info(f"[CFOPAnalyzer] F2L-{f2l_num}({slot_names[slot_found]})完成: {len(current_moves)}步")
 
                     # 记录时间戳（使用动态的f2l序号）
                     phase_key = f"f2l{f2l_num}"
@@ -268,7 +256,7 @@ class CFOPAnalyzer:
                         self.phase_timestamps["oll"] = {"start": 0, "end": 0}
                         self.phase_timed_moves["oll"] = []
                         pending_phase_start = "oll"
-                        log.info(f"[CFOPAnalyzer] 所有F2L完成，进入OLL阶段")
+                        log.debug(f"[CFOPAnalyzer] 所有F2L完成，进入OLL阶段")
                     else:
                         next_f2l_num = f2l_num + 1
                         next_key = f"f2l{next_f2l_num}"
@@ -279,7 +267,7 @@ class CFOPAnalyzer:
                 self.oll_moves = current_moves.copy()
                 self.phase_timestamps["oll"]["end"] = timestamp
                 self.phase_timed_moves["oll"] = current_timed_moves.copy()
-                log.info(f"[CFOPAnalyzer] ✓ OLL完成! 步数={len(self.oll_moves)}, 步骤={' '.join(self.oll_moves)}")
+                log.info(f"[CFOPAnalyzer] OLL完成: {len(self.oll_moves)}步")
                 current_moves = []
                 current_timed_moves = []
                 current_phase = "pll"
@@ -291,16 +279,12 @@ class CFOPAnalyzer:
                 self.pll_moves = current_moves.copy()
                 self.phase_timestamps["pll"]["end"] = timestamp
                 self.phase_timed_moves["pll"] = current_timed_moves.copy()
-                log.info(f"[CFOPAnalyzer] ✓ PLL完成! 步数={len(self.pll_moves)}, 步骤={' '.join(self.pll_moves)}")
+                log.info(f"[CFOPAnalyzer] PLL完成: {len(self.pll_moves)}步")
                 current_moves = []
                 current_timed_moves = []
 
-        log.info(f"[CFOPAnalyzer] 总步骤数: {step_count}")
-
         f2l_result_summary = [slot_data[1] for slot_data in completed_f2l_slots]
-        log.info(f"[CFOPAnalyzer] 阶段识别结果: Cross={len(self.cross_moves)}步, "
-                f"F2L={[len(m) for m in f2l_result_summary]}步, "
-                f"OLL={len(self.oll_moves)}步, PLL={len(self.pll_moves)}步")
+        log.info(f"[CFOPAnalyzer] 分析完成: Cross={len(self.cross_moves)}步, F2L={[len(m) for m in f2l_result_summary]}步, OLL={len(self.oll_moves)}步, PLL={len(self.pll_moves)}步")
         
         result = {"cross": self.cross_moves, "oll": self.oll_moves, "pll": self.pll_moves}
         # 按完成顺序输出F2L（F2L-1是第一个完成的，不一定是FR槽位）
@@ -309,10 +293,9 @@ class CFOPAnalyzer:
         for i in range(len(completed_f2l_slots), 4):
             result[f"f2l{i+1}"] = []
         
-        log.info(f"[CFOPAnalyzer] ========== 阶段分析完成 ==========")
         self._analyze_result = result
         return result
-    
+
     def _merge_moves(self, moves: List[str]) -> List[str]:
         if not moves:
             return []
@@ -372,7 +355,12 @@ class CFOPAnalyzer:
             else:
                 duration_s = 0
                 tps = 0
-            stats[phase] = {"moves": moves, "steps": step_count, "time": duration_s, "tps": tps}
+            stutter_count = self._calculate_stutter_count(phase)
+            wasted_moves = self._calculate_wasted_moves(moves)
+            stats[phase] = {
+                "moves": moves, "steps": step_count, "time": duration_s,
+                "tps": tps, "stutter_count": stutter_count, "wasted_moves": wasted_moves,
+            }
         
         observation_times = self._calculate_observation_times()
         for phase, obs_time in observation_times.items():
@@ -416,6 +404,36 @@ class CFOPAnalyzer:
         
         return max_pauses
     
+    def _calculate_stutter_count(self, phase: str) -> int:
+        timed_moves = self.phase_timed_moves.get(phase, [])
+        if len(timed_moves) < 2:
+            return 0
+        count = 0
+        for i in range(1, len(timed_moves)):
+            pause = (timed_moves[i][1] - timed_moves[i-1][1]) / 1000.0
+            if pause > AI_PAUSE_THRESHOLD_SEC:
+                count += 1
+        return count
+    
+    def _calculate_wasted_moves(self, moves: List[str]) -> int:
+        if not moves:
+            return 0
+        count = 0
+        i = 0
+        while i < len(moves) - 1:
+            cur = moves[i]
+            nxt = moves[i + 1]
+            if cur[0] == nxt[0]:
+                cur_mod = cur[1:] if len(cur) > 1 else ""
+                nxt_mod = nxt[1:] if len(nxt) > 1 else ""
+                opposites = {("", "'"), ("'", ""), ("2", "2")}
+                if (cur_mod, nxt_mod) in opposites:
+                    count += 2
+                    i += 2
+                    continue
+            i += 1
+        return count
+    
     def _format_timed_moves(self, timed_moves: List[tuple]) -> str:
         parts = []
         for move, ts in timed_moves:
@@ -423,7 +441,7 @@ class CFOPAnalyzer:
             parts.append(f"{move}@{ts_s:.2f}")
         return " ".join(parts)
     
-    def build_ai_prompt(self) -> tuple:
+    def build_ai_prompt(self, memory_text: str = "") -> tuple:
         stats = self.get_phase_stats()
         result = self.analyze()
         
@@ -476,7 +494,8 @@ class CFOPAnalyzer:
             phase_details=phase_details,
             total_steps=total_steps,
             total_time=total_time,
-            total_tps=total_tps
+            total_tps=total_tps,
+            memory_info=memory_text
         )
         
         return (system, user)
@@ -518,3 +537,23 @@ class CFOPAnalyzer:
         if all_times:
             return (max(all_times) - min(all_times)) / 1000.0
         return 0.0
+
+    def is_solve_complete(self) -> bool:
+        if not self._analyze_result:
+            return False
+        if not self.cross_moves:
+            return False
+        f2l_all_empty = all(len(self._analyze_result.get(f"f2l{i}", [])) == 0 for i in range(1, 5))
+        if f2l_all_empty:
+            return False
+        late_phase_empty = (
+            len(self._analyze_result.get("f2l4", [])) == 0
+            and len(self._analyze_result.get("oll", [])) == 0
+            and len(self._analyze_result.get("pll", [])) == 0
+        )
+        if late_phase_empty:
+            return False
+        cube = self.cube.copy()
+        for move, _ in self.solution:
+            cube.apply_standard_move(move)
+        return cube.is_pll_solved()

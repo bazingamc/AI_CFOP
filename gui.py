@@ -22,6 +22,7 @@ from analyzer import CFOPAnalyzer
 from move_utils import get_orientation_desc
 from api_utils import load_config, save_config, fetch_models, _xor_encode, _xor_decode
 from markdown_renderer import configure_markdown_tags, render_markdown
+import memory_db
 
 
 log = None
@@ -55,7 +56,9 @@ class CFOPAnalyzerGUI:
         self._render_pending = False
         self._clipboard_monitor_id = None
         self._last_clipboard = ""
-        self._smart_paste_var = tk.BooleanVar(value=False)
+        self._smart_paste_var = tk.BooleanVar(value=True)
+        self._use_memory_var = tk.BooleanVar(value=True)
+        self._stats_expanded = False
 
         self._setup_styles()
         self._create_widgets()
@@ -66,6 +69,10 @@ class CFOPAnalyzerGUI:
 
     def _async_init_tasks(self):
         self.root.update_idletasks()
+        memory_db.init_db()
+        self._update_memory_count()
+        if self._smart_paste_var.get():
+            self._start_clipboard_monitor()
         self._set_all_controls_state("normal")
         self.root.after(100, lambda: self._show_guide_dialog(True))
 
@@ -118,7 +125,7 @@ class CFOPAnalyzerGUI:
                         font=("Consolas", 10), padding=6)
         
         style.configure("TCombobox", fieldbackground=THEME["input_bg"], foreground=THEME["fg"],
-                        font=("Microsoft YaHei", 10), padding=6)
+                        font=("Microsoft YaHei", 9), padding=2)
         
         style.configure("Accent.TButton", font=("Microsoft YaHei", 10, "bold"),
                         background=THEME["button_bg"], foreground=THEME["button_fg"],
@@ -256,7 +263,7 @@ class CFOPAnalyzerGUI:
         if mode == '单组':
             if scramble and self.scramble_entry.get().strip() == scramble:
                 return True
-            if solution and self.solution_text.get("1.0", tk.END).strip() == solution:
+            if solution and self.solution_text.get().strip() == solution:
                 return True
         else:
             if not hasattr(self, 'multi_inputs') or not self.multi_inputs:
@@ -280,8 +287,8 @@ class CFOPAnalyzerGUI:
                 self.scramble_entry.delete(0, tk.END)
                 self.scramble_entry.insert(0, scramble)
             if solution:
-                self.solution_text.delete("1.0", tk.END)
-                self.solution_text.insert("1.0", solution)
+                self.solution_text.delete(0, tk.END)
+                self.solution_text.insert(0, solution)
             self._set_status("智能粘贴成功" if (scramble and solution) else "部分粘贴成功")
             self.root.after(2000, self._clear_status)
         else:
@@ -374,6 +381,183 @@ class CFOPAnalyzerGUI:
         solution = ' '.join(solution_lines).strip()
 
         return (scramble, solution)
+
+    def _toggle_stats_panel(self):
+        if self._stats_expanded:
+            self._stats_panel.pack_forget()
+            self._stats_toggle_btn.config(text="  ▶ 水平统计")
+            self._stats_expanded = False
+        else:
+            self._refresh_stats_panel()
+            self._stats_panel.pack(fill=tk.X, pady=(0, 8), after=self._stats_header)
+            self._stats_toggle_btn.config(text="  ▼ 水平统计")
+            self._stats_expanded = True
+
+    def _refresh_stats_panel(self):
+        from config import PHASE_ORDER
+        avg = memory_db.get_averages()
+        if not avg:
+            self._stats_text.config(state="normal")
+            self._stats_text.delete("1.0", tk.END)
+            self._stats_text.insert("1.0", "暂无数据，完成分析后自动记录")
+            self._stats_text.config(state="disabled")
+            return
+
+        sep = "─" * 60
+
+        self._stats_text.config(state="normal")
+        self._stats_text.delete("1.0", tk.END)
+
+        pb = memory_db.get_pb()
+        total_avg = memory_db.get_total_time_avg()
+        if pb:
+            self._stats_text.insert(tk.END, "PB: ", "bold")
+            self._stats_text.insert(tk.END, f"{pb['time']:.2f}s", "bold")
+            self._stats_text.insert(tk.END, f" ({pb['date']})\n")
+        if total_avg:
+            self._stats_text.insert(tk.END, "平均: ", "bold")
+            self._stats_text.insert(tk.END, f"{total_avg:.2f}s\n", "bold")
+
+        if pb or total_avg:
+            self._stats_text.insert(tk.END, sep + "\n")
+
+        self._stats_text.insert(tk.END, f"阶段\t步数\t用时(s)\t观察(s)\t卡顿\t废步\tTPS\n")
+        self._stats_text.insert(tk.END, sep + "\n")
+
+        phase_labels = {
+            "cross": "Cross", "f2l1": "F2L-1", "f2l2": "F2L-2",
+            "f2l3": "F2L-3", "f2l4": "F2L-4", "oll": "OLL", "pll": "PLL",
+        }
+        for phase in PHASE_ORDER:
+            if phase in avg:
+                s = avg[phase]
+                label = phase_labels.get(phase, phase)
+                self._stats_text.insert(
+                    tk.END,
+                    f"{label}\t{s['steps']:.1f}\t{s['time']:.2f}"
+                    f"\t{s['observation_time']:.2f}\t{s['stutter_count']:.1f}"
+                    f"\t{s['wasted_moves']:.1f}\t{s['tps']:.1f}\n"
+                )
+
+        date_range = memory_db.get_date_range()
+        count = memory_db.get_record_count()
+        self._stats_text.insert(tk.END, sep + "\n")
+        self._stats_text.insert(tk.END, f"记录: {count}条 | 时间: {date_range}")
+
+        self._stats_text.config(state="disabled")
+
+    def _update_memory_count(self):
+        count = memory_db.get_record_count()
+        self._memory_count_label.config(text=f"📝{count}" if count > 0 else "")
+
+    def _on_stats_manage_click(self, event):
+        x = event.x
+        widget_width = self._stats_manage_btn.winfo_width()
+        third = widget_width / 3
+        if x < third:
+            self._import_cstimer()
+        elif x < third * 2:
+            self._export_memory()
+        else:
+            self._clear_memory()
+
+    def _import_cstimer(self):
+        path = filedialog.askopenfilename(
+            title="选择csTimer导出文件",
+            filetypes=[("csTimer导出", "*.txt"), ("JSON文件", "*.json"), ("所有文件", "*.*")]
+        )
+        if not path:
+            return
+        
+        progress_win = tk.Toplevel(self.root)
+        progress_win.title("导入csTimer数据")
+        progress_win.geometry("350x120")
+        progress_win.resizable(False, False)
+        progress_win.transient(self.root)
+        progress_win.grab_set()
+        
+        progress_win.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 350) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 120) // 2
+        progress_win.geometry(f"+{x}+{y}")
+        
+        tk.Label(progress_win, text="正在导入，请稍候...", font=("Microsoft YaHei", 10)).pack(pady=(15, 5))
+        progress_label = tk.Label(progress_win, text="准备中...", font=("Microsoft YaHei", 9), fg="#666")
+        progress_label.pack(pady=5)
+        
+        def on_progress(current, total):
+            progress_label.config(text=f"处理中: {current}/{total}")
+            progress_win.update()
+
+        def do_import():
+            try:
+                result = memory_db.import_cstimer(path, progress_cb=on_progress)
+                self.root.after(0, lambda: self._on_import_done(progress_win, result))
+            except Exception as e:
+                self.root.after(0, lambda: self._on_import_done(progress_win, {
+                    "total": 0, "imported": 0, "skipped_no_review": 0, "skipped_parse_error": 0, "error": str(e)
+                }))
+        
+        import threading
+        t = threading.Thread(target=do_import, daemon=True)
+        t.start()
+
+    def _on_import_done(self, progress_win, result):
+        try:
+            progress_win.destroy()
+        except Exception:
+            pass
+        
+        self._update_memory_count()
+        if self._stats_expanded:
+            self._refresh_stats_panel()
+        
+        if "error" in result:
+            messagebox.showerror("导入失败", f"导入过程中出错:\n{result['error']}")
+            return
+        
+        msg = f"导入完成！\n\n总计: {result['total']} 条\n成功导入: {result['imported']} 条"
+        if result.get('skipped_duplicate', 0) > 0:
+            msg += f"\n重复跳过: {result['skipped_duplicate']} 条"
+        if result.get('skipped_incomplete', 0) > 0:
+            msg += f"\n未还原/阶段不全跳过: {result['skipped_incomplete']} 条"
+        if result.get('skipped_no_review', 0) > 0:
+            msg += f"\n无回顾数据跳过: {result['skipped_no_review']} 条"
+        if result.get('skipped_parse_error', 0) > 0:
+            msg += f"\n解析失败跳过: {result['skipped_parse_error']} 条"
+        if result.get('skipped_abnormal', 0) > 0:
+            msg += f"\n异常数据跳过: {result['skipped_abnormal']} 条"
+        if result.get('skipped_cross_solved', 0) > 0:
+            msg += f"\nCross预还原跳过: {result['skipped_cross_solved']} 条"
+        messagebox.showinfo("导入结果", msg)
+
+    def _export_memory(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV文件", "*.csv")],
+            initialfile=f"cfop_memory_{datetime.now().strftime('%Y%m%d')}.csv"
+        )
+        if not path:
+            return
+        count = memory_db.export_csv(path)
+        if count > 0:
+            messagebox.showinfo("导出成功", f"已导出 {count} 条记录到:\n{path}")
+        else:
+            messagebox.showwarning("提示", "没有数据可导出")
+
+    def _clear_memory(self):
+        count = memory_db.get_record_count()
+        if count == 0:
+            messagebox.showinfo("提示", "当前没有记忆数据")
+            return
+        if not messagebox.askyesno("确认清除", f"确定清除所有 {count} 条记忆数据？\n此操作不可撤销！"):
+            return
+        memory_db.clear_all()
+        self._update_memory_count()
+        if self._stats_expanded:
+            self._refresh_stats_panel()
+        self._set_status("记忆数据已清除")
+        self.root.after(2000, self._clear_status)
 
     def _show_guide_dialog(self, is_startup=True):
         if is_startup:
@@ -561,8 +745,56 @@ class CFOPAnalyzerGUI:
         self.about_btn = ttk.Button(button_frame, text="ℹ️ 关于", command=lambda: self._show_guide_dialog(False), style="Secondary.TButton")
         self.about_btn.pack(side=tk.LEFT, padx=(0, 16))
         
+        self._use_memory_cb = tk.Checkbutton(button_frame, text="🧠 使用记忆",
+                                              variable=self._use_memory_var,
+                                              bg=THEME["bg"], fg=THEME["fg"],
+                                              selectcolor=THEME["card_bg"],
+                                              activebackground=THEME["bg"],
+                                              activeforeground=THEME["accent"],
+                                              font=("Microsoft YaHei", 9))
+        self._use_memory_cb.pack(side=tk.LEFT, padx=(0, 2))
+        self._create_help_icon(button_frame, "memory").pack(side=tk.LEFT, padx=(0, 8))
+        
+        self._memory_count_label = ttk.Label(button_frame, text="", style="Status.TLabel")
+        self._memory_count_label.pack(side=tk.LEFT)
+        
         self.status_label = ttk.Label(button_frame, text="", style="Status.TLabel")
         self.status_label.pack(side=tk.LEFT)
+        
+        self._stats_header = ttk.Frame(main_frame)
+        self._stats_header.pack(fill=tk.X, pady=(0, 2))
+        self._stats_toggle_btn = ttk.Label(self._stats_header, text="  ▶ 水平统计",
+                                            font=("Microsoft YaHei", 10, "bold"),
+                                            foreground=THEME["accent"], background=THEME["bg"],
+                                            cursor="hand2")
+        self._stats_toggle_btn.pack(side=tk.LEFT)
+        self._stats_toggle_btn.bind("<Button-1>", lambda e: self._toggle_stats_panel())
+        
+        self._stats_manage_btn = ttk.Label(self._stats_header, text="  📂导入  📊导出  🗑清除",
+                                            font=("Microsoft YaHei", 9),
+                                            foreground="#888", background=THEME["bg"],
+                                            cursor="hand2")
+        self._stats_manage_btn.pack(side=tk.RIGHT, padx=(0, 8))
+        self._stats_manage_btn.bind("<Button-1>", lambda e: self._on_stats_manage_click(e))
+        
+        self._stats_panel = tk.Frame(main_frame, bg=THEME["card_bg"], padx=12, pady=8,
+                                      highlightthickness=1, highlightbackground=THEME["border"])
+        
+        self._stats_text = tk.Text(self._stats_panel, font=("Consolas", 9),
+                                    bg=THEME["card_bg"], fg=THEME["fg"],
+                                    height=14, wrap=tk.NONE, relief="flat",
+                                    cursor="arrow", state="disabled",
+                                    selectbackground=THEME["accent"],
+                                    selectforeground="white")
+        self._stats_text.tag_configure("bold", font=("Consolas", 9, "bold"))
+        self._stats_scroll_y = tk.Scrollbar(self._stats_panel, command=self._stats_text.yview, width=10)
+        self._stats_scroll_x = tk.Scrollbar(self._stats_panel, command=self._stats_text.xview,
+                                             orient=tk.HORIZONTAL, width=10)
+        self._stats_text.config(yscrollcommand=self._stats_scroll_y.set,
+                                 xscrollcommand=self._stats_scroll_x.set)
+        self._stats_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self._stats_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+        self._stats_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         
         self.timeline_header = ttk.Frame(main_frame)
         self.timeline_header.pack(fill=tk.X, pady=(0, 2))
@@ -605,33 +837,38 @@ class CFOPAnalyzerGUI:
         
         self.multi_inputs = None
         
-        input_frame = tk.Frame(self.input_container, bg=THEME["card_bg"], padx=12, pady=12,
+        input_frame = tk.Frame(self.input_container, bg=THEME["card_bg"], padx=10, pady=6,
                                highlightthickness=1, highlightbackground=THEME["border"])
         input_frame.pack(fill=tk.X)
         
         tk.Label(input_frame, text="打乱公式:", bg=THEME["card_bg"],
-                 fg=THEME["fg"], font=("Microsoft YaHei", 10)).grid(row=0, column=0, sticky=tk.W, pady=4)
-        self.scramble_entry = ttk.Entry(input_frame, width=60, font=("Consolas", 10))
-        self.scramble_entry.grid(row=0, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
+                 fg=THEME["fg"], font=("Microsoft YaHei", 9)).grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.scramble_entry = tk.Entry(input_frame, width=60, font=("Consolas", 9),
+                                        bg=THEME["input_bg"], fg=THEME["fg"],
+                                        relief="flat", borderwidth=0,
+                                        highlightthickness=1, highlightbackground=THEME["border"],
+                                        highlightcolor=THEME["accent"])
+        self.scramble_entry.grid(row=0, column=1, sticky=tk.EW, pady=2, padx=(6, 0))
         
         tk.Label(input_frame, text="底色:", bg=THEME["card_bg"],
-                 fg=THEME["fg"], font=("Microsoft YaHei", 10)).grid(row=1, column=0, sticky=tk.W, pady=4)
+                 fg=THEME["fg"], font=("Microsoft YaHei", 9)).grid(row=1, column=0, sticky=tk.W, pady=2)
         
         self.orientation_var = tk.StringVar(value=BOTTOM_COLOR_NAMES[0])
         self.orientation_combo = ttk.Combobox(input_frame, textvariable=self.orientation_var,
-                                               width=12, state="readonly", font=("Microsoft YaHei", 10))
+                                               width=12, state="readonly", font=("Microsoft YaHei", 9),
+                                               height=1)
         self.orientation_combo['values'] = BOTTOM_COLOR_NAMES
-        self.orientation_combo.grid(row=1, column=1, sticky=tk.W, pady=4, padx=(8, 0))
+        self.orientation_combo.grid(row=1, column=1, sticky=tk.W, pady=2, padx=(6, 0))
         self.orientation_combo.bind("<MouseWheel>", lambda e: "break")
         
         tk.Label(input_frame, text="还原步骤 (回顾):", bg=THEME["card_bg"],
-                 fg=THEME["fg"], font=("Microsoft YaHei", 10)).grid(row=2, column=0, sticky=tk.NW, pady=4)
-        self.solution_text = scrolledtext.ScrolledText(input_frame, width=60, height=6, wrap=tk.WORD,
-                                                        font=("Consolas", 10), bg=THEME["input_bg"],
-                                                        fg=THEME["fg"], relief="flat", borderwidth=0,
-                                                        highlightthickness=1, highlightbackground=THEME["border"],
-                                                        highlightcolor=THEME["accent"])
-        self.solution_text.grid(row=2, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
+                 fg=THEME["fg"], font=("Microsoft YaHei", 9)).grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.solution_text = tk.Entry(input_frame, width=60,
+                                       font=("Consolas", 9), bg=THEME["input_bg"],
+                                       fg=THEME["fg"], relief="flat", borderwidth=0,
+                                       highlightthickness=1, highlightbackground=THEME["border"],
+                                       highlightcolor=THEME["accent"])
+        self.solution_text.grid(row=2, column=1, sticky=tk.EW, pady=2, padx=(6, 0))
         
         input_frame.columnconfigure(1, weight=1)
         
@@ -643,25 +880,9 @@ class CFOPAnalyzerGUI:
         
         self.multi_inputs = []
         
-        outer_frame = tk.Frame(self.input_container, bg=THEME["card_bg"], padx=12, pady=8,
+        outer_frame = tk.Frame(self.input_container, bg=THEME["card_bg"], padx=8, pady=4,
                                highlightthickness=1, highlightbackground=THEME["border"])
         outer_frame.pack(fill=tk.BOTH, expand=True)
-        
-        header_frame = tk.Frame(outer_frame, bg=THEME["card_bg"])
-        header_frame.pack(fill=tk.X, pady=(0, 4))
-        
-        header_frame.columnconfigure(1, weight=1)
-        
-        tk.Label(header_frame, text="#", bg=THEME["card_bg"], fg=THEME["fg"],
-                 font=("Microsoft YaHei", 9, "bold"), width=3, anchor="w").grid(row=0, column=0, sticky="w")
-        tk.Label(header_frame, text="打乱公式", bg=THEME["card_bg"], fg=THEME["fg"],
-                 font=("Microsoft YaHei", 9, "bold"), anchor="w").grid(row=0, column=1, sticky="w", padx=(4, 0))
-        tk.Label(header_frame, text="底色", bg=THEME["card_bg"], fg=THEME["fg"],
-                 font=("Microsoft YaHei", 9, "bold"), width=10, anchor="w").grid(row=0, column=2, sticky="w", padx=(4, 0))
-        tk.Label(header_frame, text="还原步骤", bg=THEME["card_bg"], fg=THEME["fg"],
-                 font=("Microsoft YaHei", 9, "bold"), width=34, anchor="w").grid(row=0, column=3, sticky="w", padx=(4, 0))
-        tk.Label(header_frame, text="", bg=THEME["card_bg"],
-                 font=("Microsoft YaHei", 9), width=2).grid(row=0, column=4, padx=(2, 0))
         
         rows_container = tk.Frame(outer_frame, bg=THEME["card_bg"])
         rows_container.pack(fill=tk.BOTH, expand=True)
@@ -670,7 +891,9 @@ class CFOPAnalyzerGUI:
         scrollbar = ttk.Scrollbar(rows_container, orient="vertical", command=canvas.yview)
         self.multi_rows_frame = tk.Frame(canvas, bg=THEME["card_bg"])
         
-        self.multi_rows_frame.columnconfigure(0, weight=1)
+        self.multi_rows_frame.columnconfigure(1, weight=0)
+        self.multi_rows_frame.columnconfigure(2, weight=0)
+        self.multi_rows_frame.columnconfigure(3, weight=1)
         
         self.multi_rows_frame.bind("<Configure>", 
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
@@ -696,6 +919,17 @@ class CFOPAnalyzerGUI:
         outer_frame.bind("<MouseWheel>", _on_mousewheel)
         rows_container.bind("<MouseWheel>", _on_mousewheel)
         self.multi_rows_frame.bind("<MouseWheel>", _on_mousewheel)
+        
+        tk.Label(self.multi_rows_frame, text="#", bg=THEME["card_bg"], fg=THEME["fg"],
+                 font=("Microsoft YaHei", 8, "bold"), width=3, anchor="w").grid(row=0, column=0, sticky="w")
+        tk.Label(self.multi_rows_frame, text="打乱公式", bg=THEME["card_bg"], fg=THEME["fg"],
+                 font=("Microsoft YaHei", 8, "bold"), anchor="w").grid(row=0, column=1, sticky="w", padx=(2, 0))
+        tk.Label(self.multi_rows_frame, text="底色", bg=THEME["card_bg"], fg=THEME["fg"],
+                 font=("Microsoft YaHei", 8, "bold"), anchor="w").grid(row=0, column=2, sticky="w", padx=(2, 0))
+        tk.Label(self.multi_rows_frame, text="还原步骤", bg=THEME["card_bg"], fg=THEME["fg"],
+                 font=("Microsoft YaHei", 8, "bold"), anchor="w").grid(row=0, column=3, sticky="ew", padx=(2, 0))
+        tk.Label(self.multi_rows_frame, text="", bg=THEME["card_bg"],
+                 font=("Microsoft YaHei", 8), width=2).grid(row=0, column=4, padx=(1, 0))
         
         btn_frame = tk.Frame(outer_frame, bg=THEME["card_bg"], pady=8)
         btn_frame.pack(fill=tk.X)
@@ -723,29 +957,33 @@ class CFOPAnalyzerGUI:
         
         idx = len(self.multi_inputs)
         
-        row_frame = tk.Frame(self.multi_rows_frame, bg=THEME["card_bg"])
-        row_frame.columnconfigure(1, weight=1)
-        row_frame.grid(row=idx, column=0, sticky="ew", pady=1)
+        num_label = tk.Label(self.multi_rows_frame, text=f"{idx+1}", bg=THEME["card_bg"], fg=THEME["accent"],
+                             font=("Microsoft YaHei", 8, "bold"), width=3, anchor="w")
+        num_label.grid(row=idx + 1, column=0, sticky="w")
         
-        num_label = tk.Label(row_frame, text=f"{idx+1}", bg=THEME["card_bg"], fg=THEME["accent"],
-                             font=("Microsoft YaHei", 9, "bold"), width=3, anchor="w")
-        num_label.grid(row=0, column=0, sticky="w")
-        
-        scramble_entry = ttk.Entry(row_frame, font=("Consolas", 9), width=35)
-        scramble_entry.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        scramble_entry = tk.Entry(self.multi_rows_frame, font=("Consolas", 8), width=40,
+                                  bg=THEME["input_bg"], fg=THEME["fg"],
+                                  relief="flat", borderwidth=0,
+                                  highlightthickness=1, highlightbackground=THEME["border"],
+                                  highlightcolor=THEME["accent"])
+        scramble_entry.grid(row=idx + 1, column=1, sticky="w", padx=(2, 0))
         
         orientation_var = tk.StringVar(value=BOTTOM_COLOR_NAMES[0])
-        orientation_combo = ttk.Combobox(row_frame, textvariable=orientation_var,
-                                          width=8, state="readonly", font=("Microsoft YaHei", 9))
+        orientation_combo = ttk.Combobox(self.multi_rows_frame, textvariable=orientation_var,
+                                          width=8, state="readonly", font=("Microsoft YaHei", 8),
+                                          height=1)
         orientation_combo['values'] = BOTTOM_COLOR_NAMES
-        orientation_combo.grid(row=0, column=2, sticky="w", padx=(4, 0))
+        orientation_combo.grid(row=idx + 1, column=2, sticky="w", padx=(2, 0))
         orientation_combo.bind("<MouseWheel>", lambda e: "break")
         
-        solution_entry = ttk.Entry(row_frame, font=("Consolas", 9), width=34)
-        solution_entry.grid(row=0, column=3, sticky="w", padx=(4, 0))
+        solution_entry = tk.Entry(self.multi_rows_frame, font=("Consolas", 8),
+                                  bg=THEME["input_bg"], fg=THEME["fg"],
+                                  relief="flat", borderwidth=0,
+                                  highlightthickness=1, highlightbackground=THEME["border"],
+                                  highlightcolor=THEME["accent"])
+        solution_entry.grid(row=idx + 1, column=3, sticky="ew", padx=(2, 0))
         
         inp = {
-            'row_frame': row_frame,
             'num_label': num_label,
             'scramble': scramble_entry,
             'orientation_var': orientation_var,
@@ -753,13 +991,15 @@ class CFOPAnalyzerGUI:
             'solution': solution_entry
         }
         
-        del_btn = ttk.Button(row_frame, text="✕", width=2, style="Danger.TButton",
-                             command=lambda: self._remove_multi_row_by_inp(inp))
-        del_btn.grid(row=0, column=4, padx=(2, 0))
+        del_btn = tk.Button(self.multi_rows_frame, text="✕", width=2,
+                            font=("Microsoft YaHei", 7), fg="#fff", bg=THEME["danger"],
+                            activebackground="#d63031", activeforeground="#fff",
+                            relief="flat", borderwidth=0, cursor="hand2",
+                            command=lambda: self._remove_multi_row_by_inp(inp))
+        del_btn.grid(row=idx + 1, column=4, padx=(2, 0))
         inp['del_btn'] = del_btn
         
         if hasattr(self, 'multi_mousewheel_func'):
-            row_frame.bind("<MouseWheel>", self.multi_mousewheel_func)
             scramble_entry.bind("<MouseWheel>", self.multi_mousewheel_func)
             orientation_combo.bind("<MouseWheel>", lambda e: "break")
             solution_entry.bind("<MouseWheel>", self.multi_mousewheel_func)
@@ -782,14 +1022,25 @@ class CFOPAnalyzerGUI:
             return
         
         if inp in self.multi_inputs:
-            inp['row_frame'].destroy()
+            for key in ('num_label', 'scramble', 'orientation_combo', 'solution', 'del_btn'):
+                if key in inp:
+                    inp[key].destroy()
             self.multi_inputs.remove(inp)
             self._update_multi_row_numbers()
             self._update_multi_count()
+            self._reindex_multi_grid()
     
     def _update_multi_row_numbers(self):
         for i, inp in enumerate(self.multi_inputs):
             inp['num_label'].config(text=f"{i+1}")
+    
+    def _reindex_multi_grid(self):
+        for i, inp in enumerate(self.multi_inputs):
+            inp['num_label'].grid(row=i + 1, column=0, sticky="w")
+            inp['scramble'].grid(row=i + 1, column=1, sticky="w", padx=(2, 0))
+            inp['orientation_combo'].grid(row=i + 1, column=2, sticky="w", padx=(2, 0))
+            inp['solution'].grid(row=i + 1, column=3, sticky="ew", padx=(2, 0))
+            inp['del_btn'].grid(row=i + 1, column=4, padx=(2, 0))
     
     def _update_multi_count(self):
         count = len(self.multi_inputs) if hasattr(self, 'multi_inputs') else 0
@@ -826,7 +1077,7 @@ class CFOPAnalyzerGUI:
         try:
             config = load_config()
             config["scramble"] = self.scramble_entry.get().strip()
-            config["solution"] = self.solution_text.get("1.0", tk.END).strip()
+            config["solution"] = self.solution_text.get().strip()
             config["orientation"] = self.orientation_var.get()
             config["analysis_mode"] = "单组"
             save_config(config)
@@ -872,7 +1123,7 @@ class CFOPAnalyzerGUI:
             if config.get("scramble"):
                 self.scramble_entry.insert(0, config["scramble"])
             if config.get("solution"):
-                self.solution_text.insert("1.0", config["solution"])
+                self.solution_text.insert(0, config["solution"])
             if config.get("orientation"):
                 self.orientation_var.set(self._get_bottom_name_from_saved(config["orientation"]))
         except Exception:
@@ -911,9 +1162,11 @@ class CFOPAnalyzerGUI:
         if config.get("models"):
             self.model_combo["values"] = config["models"]
 
-        if config.get("smart_paste", False):
-            self._smart_paste_var.set(True)
-            self._start_clipboard_monitor()
+        if "smart_paste" in config and not config["smart_paste"]:
+            self._smart_paste_var.set(False)
+        
+        if "use_memory" in config and not config["use_memory"]:
+            self._use_memory_var.set(False)
         
         mode = self.analysis_mode_var.get()
         if mode == '多组':
@@ -952,6 +1205,10 @@ class CFOPAnalyzerGUI:
             config["smart_paste"] = self._smart_paste_var.get()
         except Exception:
             pass
+        try:
+            config["use_memory"] = self._use_memory_var.get()
+        except Exception:
+            pass
         save_config(config)
     
     def _on_close(self):
@@ -968,7 +1225,7 @@ class CFOPAnalyzerGUI:
         
         if mode == '单组':
             self.scramble_entry.delete(0, tk.END)
-            self.solution_text.delete(1.0, tk.END)
+            self.solution_text.delete(0, tk.END)
         elif hasattr(self, 'multi_inputs') and self.multi_inputs:
             for inp in self.multi_inputs:
                 inp['scramble'].delete(0, tk.END)
@@ -1268,7 +1525,7 @@ class CFOPAnalyzerGUI:
 
     def _do_single_analysis(self):
         scramble = self.scramble_entry.get().strip()
-        solution = self.solution_text.get(1.0, tk.END).strip()
+        solution = self.solution_text.get().strip()
         api_key = self.api_key_entry.get().strip()
         model = self.model_var.get()
         
@@ -1306,7 +1563,9 @@ class CFOPAnalyzerGUI:
                 messagebox.showerror("步骤拆解异常", validation_errors)
                 return
             
-            system_prompt, user_prompt = analyzer.build_ai_prompt()
+            memory_text = self._build_memory_text() if self._use_memory_var.get() else ""
+            comparison_text = self._build_comparison_text(analyzer) if self._use_memory_var.get() else ""
+            system_prompt, user_prompt = analyzer.build_ai_prompt(memory_text + comparison_text)
             
             log.info(f"AI分析System提示词:\n{system_prompt}")
             log.info(f"AI分析User提示词:\n{user_prompt}")
@@ -1321,23 +1580,18 @@ class CFOPAnalyzerGUI:
         self._stream_stop = False
         self._stream_buffer = ""
         self._reasoning_buffer = ""
-        self._solution_summary = analyzer.format_output()
+        scramble = self.scramble_entry.get().strip()
+        self._solution_summary = (
+            f"【解法复盘】\n\n"
+            f"【打乱】:{scramble}\n"
+            f"【底色】:{bottom_name} | 【自动朝向】:{get_orientation_desc(analyzer.top_color, analyzer.front_color)}\n"
+            + analyzer.format_output()
+        )
         self._count_consumed = False
         self.ai_analyze_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
         self.result_text.delete(1.0, tk.END)
-        
-        scramble = self.scramble_entry.get().strip()
-        self.result_text.insert(tk.END, "【解法复盘】\n\n", "normal")
-        self.result_text.insert(tk.END, f"【打乱】:{scramble}\n", "normal")
-        self.result_text.insert(
-            tk.END,
-            f"【底色】:{bottom_name} | 【自动朝向】:{get_orientation_desc(analyzer.top_color, analyzer.front_color)}\n",
-            "normal"
-        )
-        for line in self._solution_summary.split("\n"):
-            self.result_text.insert(tk.END, line + "\n", "normal")
-        self.result_text.insert(tk.END, "\n---\n\n", "hr")
+        self.result_text.insert(tk.END, "🤔 AI思考中...\n", "italic")
         
         self._start_ai_status_animation("thinking")
         
@@ -1406,19 +1660,9 @@ class CFOPAnalyzerGUI:
         self.result_text.delete("1.0", tk.END)
         
         if self._stream_buffer:
-            mode = self.analysis_mode_var.get()
             if self._solution_summary:
                 self.result_text.insert(tk.END, self._solution_summary, "normal")
-            elif mode == '单组':
-                try:
-                    scramble = self.scramble_entry.get().strip()
-                    self.result_text.insert(tk.END, "【解法复盘】\n\n", "normal")
-                    self.result_text.insert(tk.END, f"【打乱】:{scramble}\n", "normal")
-                    for line in self._solution_summary.split("\n"):
-                        self.result_text.insert(tk.END, line + "\n", "normal")
-                    self.result_text.insert(tk.END, "\n---\n\n", "hr")
-                except Exception:
-                    pass
+                self.result_text.insert(tk.END, "\n\n", "normal")
             render_markdown(self.result_text, self._stream_buffer)
         elif self._reasoning_buffer:
             self.result_text.insert(tk.END, "🤔 AI思考中...\n\n", "italic")
@@ -1450,7 +1694,238 @@ class CFOPAnalyzerGUI:
         self._stop_ai_status_animation()
         self._set_status("分析完成")
         self.root.after(3000, self._clear_status)
+        self._save_to_memory()
     
+    def _build_memory_text(self) -> str:
+        from config import PHASE_ORDER
+        period_avgs = memory_db.get_all_averages_by_period()
+        if not period_avgs:
+            return ""
+        
+        period_order = ["近7天", "近30天", "近1年", "全部"]
+        available_periods = [p for p in period_order if p in period_avgs]
+        if not available_periods:
+            return ""
+        
+        lines = ["【历史平均水平】"]
+        
+        display_phases = ["cross", "f2l_avg", "oll", "pll"]
+        display_labels = {"cross": "Cross", "f2l_avg": "F2L均", "oll": "OLL", "pll": "PLL"}
+        
+        for phase_key in display_phases:
+            label = display_labels[phase_key]
+            parts = [f"{label}:"]
+            for period in available_periods:
+                avg_data = period_avgs.get(period, {})
+                if phase_key == "f2l_avg":
+                    f2l_phases = ["f2l1", "f2l2", "f2l3", "f2l4"]
+                    f2l_data = [avg_data.get(p, {}) for p in f2l_phases]
+                    f2l_data = [d for d in f2l_data if d]
+                    if f2l_data:
+                        avg_steps = sum(d["steps"] for d in f2l_data) / len(f2l_data)
+                        avg_time = sum(d["time"] for d in f2l_data) / len(f2l_data)
+                        avg_tps = sum(d["tps"] for d in f2l_data) / len(f2l_data)
+                        avg_obs = sum(d["observation_time"] for d in f2l_data) / len(f2l_data)
+                        parts.append(f" {period}={avg_steps:.0f}步{avg_time:.1f}s(TPS{avg_tps:.1f} 观察{avg_obs:.1f}s)")
+                    else:
+                        parts.append(f" {period}=-")
+                else:
+                    d = avg_data.get(phase_key, {})
+                    if d:
+                        obs_str = f" 观察{d['observation_time']:.1f}s" if phase_key != "cross" else ""
+                        parts.append(f" {period}={d['steps']:.0f}步{d['time']:.1f}s(TPS{d['tps']:.1f}{obs_str})")
+                    else:
+                        parts.append(f" {period}=-")
+            lines.append(" |".join(parts))
+        
+        total_avg = memory_db.get_total_time_avg()
+        if total_avg:
+            lines.append(f"平均总用时: {total_avg:.2f}s")
+        
+        return "\n".join(lines) + "\n"
+
+    def _build_comparison_text(self, analyzer) -> str:
+        period_avgs = memory_db.get_all_averages_by_period()
+        if not period_avgs:
+            return ""
+        
+        baseline_period = None
+        for p in ["全部", "近1年", "近30天", "近7天"]:
+            if p in period_avgs:
+                baseline_period = p
+                break
+        if not baseline_period:
+            return ""
+        
+        baseline = period_avgs[baseline_period]
+        stats = analyzer.get_phase_stats()
+        
+        lines = [f"【本次与历史对比】（基准：{baseline_period}平均）"]
+        
+        cur = stats["cross"]
+        hist = baseline.get("cross", {})
+        if hist:
+            ds = cur["steps"] - hist["steps"]
+            dt = cur["time"] - hist["time"]
+            dtps = cur["tps"] - hist["tps"]
+            tag = "进步" if dt < 0 else ("退步" if dt > 0 else "持平")
+            lines.append(f"Cross: 本次 {cur['steps']}步{cur['time']:.1f}s(TPS{cur['tps']:.1f}) vs 历史 {hist['steps']:.0f}步{hist['time']:.1f}s(TPS{hist['tps']:.1f}) → 步数{ds:+.0f} 用时{dt:+.1f}s TPS{dtps:+.1f} {tag}")
+        
+        f2l_phases = ["f2l1", "f2l2", "f2l3", "f2l4"]
+        cur_f2l = [stats[p] for p in f2l_phases if stats[p]["steps"] > 0]
+        hist_f2l = [baseline.get(p, {}) for p in f2l_phases]
+        hist_f2l_valid = [d for d in hist_f2l if d]
+        if cur_f2l and hist_f2l_valid:
+            cs = sum(s["steps"] for s in cur_f2l) / len(cur_f2l)
+            ct = sum(s["time"] for s in cur_f2l) / len(cur_f2l)
+            ctps = sum(s["tps"] for s in cur_f2l) / len(cur_f2l)
+            cobs = sum(s.get("observation_time", 0) for s in cur_f2l) / len(cur_f2l)
+            hs = sum(d["steps"] for d in hist_f2l_valid) / len(hist_f2l_valid)
+            ht = sum(d["time"] for d in hist_f2l_valid) / len(hist_f2l_valid)
+            htps = sum(d["tps"] for d in hist_f2l_valid) / len(hist_f2l_valid)
+            hobs = sum(d["observation_time"] for d in hist_f2l_valid) / len(hist_f2l_valid)
+            ds = cs - hs
+            dt = ct - ht
+            dtps = ctps - htps
+            dobs = cobs - hobs
+            tag = "进步" if dt < 0 else ("退步" if dt > 0 else "持平")
+            lines.append(f"F2L均: 本次 {cs:.0f}步{ct:.1f}s(TPS{ctps:.1f} 观察{cobs:.1f}s) vs 历史 {hs:.0f}步{ht:.1f}s(TPS{htps:.1f} 观察{hobs:.1f}s) → 步数{ds:+.0f} 用时{dt:+.1f}s TPS{dtps:+.1f} 观察{dobs:+.1f}s {tag}")
+        
+        for phase_key, phase_label in [("oll", "OLL"), ("pll", "PLL")]:
+            cur = stats[phase_key]
+            hist = baseline.get(phase_key, {})
+            if hist:
+                ds = cur["steps"] - hist["steps"]
+                dt = cur["time"] - hist["time"]
+                dtps = cur["tps"] - hist["tps"]
+                tag = "进步" if dt < 0 else ("退步" if dt > 0 else "持平")
+                obs_cur = cur.get("observation_time")
+                obs_hist = hist.get("observation_time")
+                obs_info = ""
+                if obs_cur is not None and obs_hist is not None:
+                    dobs = obs_cur - obs_hist
+                    obs_info = f" 观察{dobs:+.1f}s"
+                lines.append(f"{phase_label}:   本次 {cur['steps']}步{cur['time']:.1f}s(TPS{cur['tps']:.1f}) vs 历史 {hist['steps']:.0f}步{hist['time']:.1f}s(TPS{hist['tps']:.1f}) → 步数{ds:+.0f} 用时{dt:+.1f}s TPS{dtps:+.1f}{obs_info} {tag}")
+        
+        total_avg = memory_db.get_total_time_avg()
+        if total_avg:
+            cur_total = analyzer.get_total_time()
+            diff = cur_total - total_avg
+            tag = "进步" if diff < 0 else ("退步" if diff > 0 else "持平")
+            lines.append(f"总用时: 本次 {cur_total:.1f}s vs 历史 {total_avg:.1f}s → {diff:+.1f}s {tag}")
+        
+        return "\n".join(lines) + "\n"
+
+    def _build_multi_comparison_text(self, analyzers) -> str:
+        period_avgs = memory_db.get_all_averages_by_period()
+        if not period_avgs:
+            return ""
+        
+        baseline_period = None
+        for p in ["全部", "近1年", "近30天", "近7天"]:
+            if p in period_avgs:
+                baseline_period = p
+                break
+        if not baseline_period:
+            return ""
+        
+        baseline = period_avgs[baseline_period]
+        
+        phases = ["cross", "f2l1", "f2l2", "f2l3", "f2l4", "oll", "pll"]
+        avg_stats = {}
+        for phase in phases:
+            valid = [a.get_phase_stats()[phase] for a in analyzers if a.get_phase_stats()[phase]["steps"] > 0]
+            if valid:
+                avg_stats[phase] = {
+                    "steps": sum(s["steps"] for s in valid) / len(valid),
+                    "time": sum(s["time"] for s in valid) / len(valid),
+                    "tps": sum(s["tps"] for s in valid) / len(valid),
+                    "observation_time": sum(s.get("observation_time", 0) for s in valid) / len(valid) if phase != "cross" else None,
+                }
+        
+        lines = [f"【多组平均与历史对比】（基准：{baseline_period}平均）"]
+        
+        cur = avg_stats.get("cross", {})
+        hist = baseline.get("cross", {})
+        if cur and hist:
+            ds = cur["steps"] - hist["steps"]
+            dt = cur["time"] - hist["time"]
+            dtps = cur["tps"] - hist["tps"]
+            tag = "进步" if dt < 0 else ("退步" if dt > 0 else "持平")
+            lines.append(f"Cross: 本次均 {cur['steps']:.0f}步{cur['time']:.1f}s(TPS{cur['tps']:.1f}) vs 历史 {hist['steps']:.0f}步{hist['time']:.1f}s(TPS{hist['tps']:.1f}) → 步数{ds:+.0f} 用时{dt:+.1f}s TPS{dtps:+.1f} {tag}")
+        
+        f2l_phases = ["f2l1", "f2l2", "f2l3", "f2l4"]
+        cur_f2l = [avg_stats.get(p, {}) for p in f2l_phases]
+        cur_f2l_valid = [d for d in cur_f2l if d]
+        hist_f2l = [baseline.get(p, {}) for p in f2l_phases]
+        hist_f2l_valid = [d for d in hist_f2l if d]
+        if cur_f2l_valid and hist_f2l_valid:
+            cs = sum(d["steps"] for d in cur_f2l_valid) / len(cur_f2l_valid)
+            ct = sum(d["time"] for d in cur_f2l_valid) / len(cur_f2l_valid)
+            ctps = sum(d["tps"] for d in cur_f2l_valid) / len(cur_f2l_valid)
+            cobs = sum(d["observation_time"] for d in cur_f2l_valid) / len(cur_f2l_valid)
+            hs = sum(d["steps"] for d in hist_f2l_valid) / len(hist_f2l_valid)
+            ht = sum(d["time"] for d in hist_f2l_valid) / len(hist_f2l_valid)
+            htps = sum(d["tps"] for d in hist_f2l_valid) / len(hist_f2l_valid)
+            hobs = sum(d["observation_time"] for d in hist_f2l_valid) / len(hist_f2l_valid)
+            ds = cs - hs
+            dt = ct - ht
+            dtps = ctps - htps
+            dobs = cobs - hobs
+            tag = "进步" if dt < 0 else ("退步" if dt > 0 else "持平")
+            lines.append(f"F2L均: 本次均 {cs:.0f}步{ct:.1f}s(TPS{ctps:.1f} 观察{cobs:.1f}s) vs 历史 {hs:.0f}步{ht:.1f}s(TPS{htps:.1f} 观察{hobs:.1f}s) → 步数{ds:+.0f} 用时{dt:+.1f}s TPS{dtps:+.1f} 观察{dobs:+.1f}s {tag}")
+        
+        for phase_key, phase_label in [("oll", "OLL"), ("pll", "PLL")]:
+            cur = avg_stats.get(phase_key, {})
+            hist = baseline.get(phase_key, {})
+            if cur and hist:
+                ds = cur["steps"] - hist["steps"]
+                dt = cur["time"] - hist["time"]
+                dtps = cur["tps"] - hist["tps"]
+                tag = "进步" if dt < 0 else ("退步" if dt > 0 else "持平")
+                obs_info = ""
+                if cur.get("observation_time") is not None and hist.get("observation_time") is not None:
+                    dobs = cur["observation_time"] - hist["observation_time"]
+                    obs_info = f" 观察{dobs:+.1f}s"
+                lines.append(f"{phase_label}:   本次均 {cur['steps']:.0f}步{cur['time']:.1f}s(TPS{cur['tps']:.1f}) vs 历史 {hist['steps']:.0f}步{hist['time']:.1f}s(TPS{hist['tps']:.1f}) → 步数{ds:+.0f} 用时{dt:+.1f}s TPS{dtps:+.1f}{obs_info} {tag}")
+        
+        total_avg = memory_db.get_total_time_avg()
+        if total_avg:
+            cur_total = sum(a.get_total_time() for a in analyzers) / len(analyzers)
+            diff = cur_total - total_avg
+            tag = "进步" if diff < 0 else ("退步" if diff > 0 else "持平")
+            lines.append(f"总用时: 本次均 {cur_total:.1f}s vs 历史 {total_avg:.1f}s → {diff:+.1f}s {tag}")
+        
+        return "\n".join(lines) + "\n"
+
+    def _save_to_memory(self):
+        if not self._use_memory_var.get():
+            return
+        mode = self.analysis_mode_var.get()
+        try:
+            if mode == '单组':
+                if not hasattr(self, '_last_analyzer') or not self._last_analyzer:
+                    return
+                analyzer = self._last_analyzer
+                stats = analyzer.get_phase_stats()
+                scramble_text = self.scramble_entry.get().strip() if hasattr(self, 'scramble_entry') else ""
+                solution_text = self.solution_text.get().strip() if hasattr(self, 'solution_text') else ""
+                total_time = analyzer.get_total_time()
+                bottom_name = self.orientation_var.get() if hasattr(self, 'orientation_var') else ""
+                memory_db.save_record(scramble_text, solution_text, total_time, bottom_name, stats)
+            else:
+                if not hasattr(self, '_last_multi_data') or not self._last_multi_data:
+                    return
+                for g, analyzer in self._last_multi_data:
+                    stats = analyzer.get_phase_stats()
+                    total_time = analyzer.get_total_time()
+                    memory_db.save_record(g['scramble'], g['solution'], total_time, g['bottom_name'], stats)
+            self._update_memory_count()
+            if self._stats_expanded:
+                self._refresh_stats_panel()
+        except Exception as e:
+            log.error(f"保存记忆数据失败: {e}")
+
     def _on_ai_error(self, error_msg: str):
         log.error(f"AI分析失败: {error_msg}")
         self.ai_analyze_btn.config(state="normal")
@@ -1525,7 +2000,11 @@ class CFOPAnalyzerGUI:
                 messagebox.showerror("错误", f"第 {g['index']} 组构建分析数据失败:\n{str(e)}")
                 return
         
-        system_prompt, user_prompt = self._build_multi_analysis_prompts(analyzers)
+        memory_text = self._build_memory_text() if self._use_memory_var.get() else ""
+        comparison_text = self._build_multi_comparison_text(analyzers) if self._use_memory_var.get() else ""
+        system_prompt, user_prompt = self._build_multi_analysis_prompts(analyzers, memory_text + comparison_text)
+        
+        self._last_multi_data = list(zip(groups_data, analyzers))
         
         log.info(f"多组分析System提示词:\n{system_prompt}")
         log.info(f"多组分析User提示词:\n{user_prompt}")
@@ -1581,7 +2060,6 @@ class CFOPAnalyzerGUI:
                 summary_lines.append(a.format_output())
                 summary_lines.append("\n")
             
-            summary_lines.append("\n---\n\n")
             self._solution_summary = "".join(summary_lines)
         
         self._start_ai_status_animation("thinking")
@@ -1631,7 +2109,7 @@ class CFOPAnalyzerGUI:
         
         threading.Thread(target=do_stream, daemon=True).start()
     
-    def _build_multi_analysis_prompts(self, analyzers):
+    def _build_multi_analysis_prompts(self, analyzers, memory_text=""):
         from config import SYSTEM_PROMPT, USER_MULTI_TEMPLATE, AI_PAUSE_THRESHOLD_SEC
         
         count = len(analyzers)
@@ -1662,7 +2140,8 @@ class CFOPAnalyzerGUI:
             min_time=min(times),
             worst_idx=worst_idx,
             max_time=max(times),
-            groups_detail=groups_detail
+            groups_detail=groups_detail,
+            memory_info=memory_text
         )
         
         return (system, user)
