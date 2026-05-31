@@ -4,7 +4,7 @@ GUI应用主类 - CFOPAnalyzerGUI
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
-from typing import List
+from typing import List, Dict
 import threading
 import json
 import re
@@ -403,25 +403,31 @@ class CFOPAnalyzerGUI:
             self._stats_text.config(state="disabled")
             return
 
-        sep = "─" * 60
+        sep = "─" * 80
 
         self._stats_text.config(state="normal")
         self._stats_text.delete("1.0", tk.END)
 
         pb = memory_db.get_pb()
         total_avg = memory_db.get_total_time_avg()
+        total_std = memory_db.get_total_time_std()
         if pb:
             self._stats_text.insert(tk.END, "PB: ", "bold")
             self._stats_text.insert(tk.END, f"{pb['time']:.2f}s", "bold")
             self._stats_text.insert(tk.END, f" ({pb['date']})\n")
         if total_avg:
             self._stats_text.insert(tk.END, "平均: ", "bold")
-            self._stats_text.insert(tk.END, f"{total_avg:.2f}s\n", "bold")
+            self._stats_text.insert(tk.END, f"{total_avg:.2f}s", "bold")
+            if total_std:
+                self._stats_text.insert(tk.END, f"  标准差: ", "bold")
+                self._stats_text.insert(tk.END, f"{total_std:.2f}s\n", "bold")
+            else:
+                self._stats_text.insert(tk.END, "\n")
 
         if pb or total_avg:
             self._stats_text.insert(tk.END, sep + "\n")
 
-        self._stats_text.insert(tk.END, f"阶段\t步数\t用时(s)\t观察(s)\t卡顿\t废步\tTPS\n")
+        self._stats_text.insert(tk.END, f"阶段\t步数(σ)\t用时(s)(σ)\t观察(s)(σ)\t卡顿\t废步\tTPS(σ)\n")
         self._stats_text.insert(tk.END, sep + "\n")
 
         phase_labels = {
@@ -434,15 +440,18 @@ class CFOPAnalyzerGUI:
                 label = phase_labels.get(phase, phase)
                 self._stats_text.insert(
                     tk.END,
-                    f"{label}\t{s['steps']:.1f}\t{s['time']:.2f}"
-                    f"\t{s['observation_time']:.2f}\t{s['stutter_count']:.1f}"
-                    f"\t{s['wasted_moves']:.1f}\t{s['tps']:.1f}\n"
+                    f"{label}\t{s['steps']:.1f}({s['steps_std']:.1f})"
+                    f"\t{s['time']:.2f}({s['time_std']:.2f})"
+                    f"\t{s['observation_time']:.2f}({s['observation_time_std']:.2f})"
+                    f"\t{s['stutter_count']:.1f}"
+                    f"\t{s['wasted_moves']:.1f}"
+                    f"\t{s['tps']:.1f}({s['tps_std']:.1f})\n"
                 )
 
         date_range = memory_db.get_date_range()
         count = memory_db.get_record_count()
         self._stats_text.insert(tk.END, sep + "\n")
-        self._stats_text.insert(tk.END, f"记录: {count}条 | 时间: {date_range}")
+        self._stats_text.insert(tk.END, f"记录: {count}条 | 时间: {date_range} | 统计: 最近1000次")
 
         self._stats_text.config(state="disabled")
 
@@ -741,6 +750,9 @@ class CFOPAnalyzerGUI:
         
         self.clear_btn = ttk.Button(button_frame, text="🗑 清空", command=self._clear, style="Secondary.TButton")
         self.clear_btn.pack(side=tk.LEFT, padx=(0, 8))
+        
+        self.daily_btn = ttk.Button(button_frame, text="📊 今日总结", command=self._show_daily_report, style="Secondary.TButton")
+        self.daily_btn.pack(side=tk.LEFT, padx=(0, 8))
         
         self.about_btn = ttk.Button(button_frame, text="ℹ️ 关于", command=lambda: self._show_guide_dialog(False), style="Secondary.TButton")
         self.about_btn.pack(side=tk.LEFT, padx=(0, 16))
@@ -1935,6 +1947,414 @@ class CFOPAnalyzerGUI:
         self.result_text.config(state="normal")
         self.result_text.delete(1.0, tk.END)
         self.result_text.insert(tk.END, f"分析失败: {error_msg}")
+
+    def _show_daily_report(self):
+        import daily_report
+
+        stats = daily_report.get_today_stats()
+        if not stats:
+            messagebox.showinfo("今日总结", "今日暂无练习数据。")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title(f"今日练习总结 ({stats['date']})")
+        win.geometry("720x820")
+        win.configure(bg=THEME["bg"])
+        win.resizable(True, True)
+        win.transient(self.root)
+        win.grab_set()
+
+        main_frame = tk.Frame(win, bg=THEME["bg"], padx=16, pady=12)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        btn_frame = tk.Frame(main_frame, bg=THEME["bg"])
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(8, 0))
+
+        chart_frame = tk.Frame(main_frame, bg=THEME["card_bg"],
+                               highlightthickness=1, highlightbackground=THEME["border"])
+        chart_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(0, 8))
+
+        text_frame = tk.Frame(main_frame, bg=THEME["card_bg"],
+                              highlightthickness=1, highlightbackground=THEME["border"])
+        text_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 8))
+
+        report_text = tk.Text(text_frame, font=("Microsoft YaHei", 10),
+                              bg=THEME["card_bg"], fg=THEME["fg"],
+                              wrap=tk.WORD, relief="flat", padx=12, pady=10,
+                              cursor="arrow", state="disabled")
+        report_text.tag_configure("bold", font=("Microsoft YaHei", 10, "bold"))
+        report_text.tag_configure("heading", font=("Microsoft YaHei", 14, "bold"),
+                                  foreground=THEME["accent"])
+        report_text.tag_configure("section", font=("Microsoft YaHei", 11, "bold"),
+                                  foreground=THEME["accent"])
+        report_text.tag_configure("ai_summary", font=("Microsoft YaHei", 10),
+                                  foreground="#2d3436", background="#f0eef8",
+                                  lmargin1=10, lmargin2=10, spacing1=6, spacing3=6)
+        report_text.tag_configure("italic", font=("Microsoft YaHei", 10, "italic"),
+                                  foreground="#636e72")
+        report_text.tag_configure("thinking", font=("Microsoft YaHei", 9),
+                                  foreground="#b2bec3", lmargin1=20, lmargin2=20)
+        report_text.tag_configure("step_status", font=("Microsoft YaHei", 11, "bold"),
+                                  foreground=THEME["accent"])
+        scroll = tk.Scrollbar(text_frame, command=report_text.yview, width=10)
+        report_text.config(yscrollcommand=scroll.set)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        report_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        stats_text = daily_report.build_stats_text(stats)
+        report_text.config(state="normal")
+        for line in stats_text.split("\n"):
+            if line.startswith("📅"):
+                report_text.insert(tk.END, line + "\n", "heading")
+            elif line.startswith("各阶段") or line.startswith("12次") or line.startswith("Ao12"):
+                report_text.insert(tk.END, line + "\n", "section")
+            elif line.startswith("🏆") or line.startswith("📉"):
+                report_text.insert(tk.END, line + "\n", "bold")
+            else:
+                report_text.insert(tk.END, line + "\n", "normal")
+        report_text.config(state="disabled")
+
+        try:
+            line_path, hist_path = daily_report.generate_charts(stats["times"])
+            chart_inner = tk.Frame(chart_frame, bg=THEME["card_bg"])
+            chart_inner.pack(fill=tk.X, padx=8, pady=8)
+
+            if os.path.isfile(line_path):
+                from PIL import Image as PILImage, ImageTk
+                img = PILImage.open(line_path)
+                img.thumbnail((330, 165), PILImage.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                lbl1 = tk.Label(chart_inner, image=photo, bg=THEME["card_bg"])
+                lbl1.image = photo
+                lbl1.pack(side=tk.LEFT, padx=(0, 4))
+
+            if os.path.isfile(hist_path):
+                from PIL import Image as PILImage, ImageTk
+                img2 = PILImage.open(hist_path)
+                img2.thumbnail((330, 165), PILImage.LANCZOS)
+                photo2 = ImageTk.PhotoImage(img2)
+                lbl2 = tk.Label(chart_inner, image=photo2, bg=THEME["card_bg"])
+                lbl2.image = photo2
+                lbl2.pack(side=tk.LEFT, padx=(4, 0))
+        except Exception as e:
+            log.warning(f"图表生成失败: {e}")
+            err_lbl = tk.Label(chart_frame, text=f"图表生成失败: {e}",
+                               bg=THEME["card_bg"], fg="#888",
+                               font=("Microsoft YaHei", 9))
+            err_lbl.pack(pady=8)
+
+        ai_summary_holder = {"text": ""}
+        ao12_analysis_holder = {"best": "", "worst": ""}
+
+        def do_ai_summary():
+            api_key = self.api_key_entry.get().strip()
+            model = self.model_var.get()
+            if not api_key or not model:
+                messagebox.showwarning("警告", "请先输入API Key并选择模型！", parent=win)
+                return
+
+            confirm_win = tk.Toplevel(win)
+            confirm_win.title("AI总结")
+            confirm_win.geometry("320x200")
+            confirm_win.configure(bg=THEME["bg"])
+            confirm_win.resizable(False, False)
+            confirm_win.transient(win)
+            confirm_win.grab_set()
+
+            tk.Label(confirm_win, text=f"将使用模型: {model}",
+                     font=("Microsoft YaHei", 10), bg=THEME["bg"],
+                     fg=THEME["fg"]).pack(pady=(16, 8))
+
+            has_ao12 = stats.get("ao12_results") is not None
+            analyze_best_var = tk.BooleanVar(value=False)
+            analyze_worst_var = tk.BooleanVar(value=False)
+
+            cb_frame = tk.Frame(confirm_win, bg=THEME["bg"])
+            cb_frame.pack(pady=4)
+            cb_best = tk.Checkbutton(cb_frame, text="分析最佳Ao12", variable=analyze_best_var,
+                                     bg=THEME["bg"], fg=THEME["fg"],
+                                     activebackground=THEME["bg"],
+                                     font=("Microsoft YaHei", 9),
+                                     state="normal" if has_ao12 else "disabled")
+            cb_best.pack(anchor="w", padx=40)
+            cb_worst = tk.Checkbutton(cb_frame, text="分析最差Ao12", variable=analyze_worst_var,
+                                      bg=THEME["bg"], fg=THEME["fg"],
+                                      activebackground=THEME["bg"],
+                                      font=("Microsoft YaHei", 9),
+                                      state="normal" if has_ao12 else "disabled")
+            cb_worst.pack(anchor="w", padx=40)
+
+            if not has_ao12:
+                tk.Label(confirm_win, text="（今日还原次数≤12，无法计算Ao12）",
+                         font=("Microsoft YaHei", 8), bg=THEME["bg"],
+                         fg="#999").pack(pady=(2, 0))
+
+            btn_row = tk.Frame(confirm_win, bg=THEME["bg"])
+            btn_row.pack(pady=12)
+
+            def on_confirm():
+                confirm_win.destroy()
+                _start_ai(api_key, model, analyze_best_var.get(), analyze_worst_var.get())
+
+            def on_cancel():
+                confirm_win.destroy()
+
+            ttk.Button(btn_row, text="确认", command=on_confirm,
+                       style="Accent.TButton").pack(side=tk.LEFT, padx=8)
+            ttk.Button(btn_row, text="取消", command=on_cancel,
+                       style="Secondary.TButton").pack(side=tk.LEFT, padx=8)
+
+        def _start_ai(api_key: str, model: str, analyze_best: bool, analyze_worst: bool):
+            ai_btn.config(state="disabled", text="⏳ AI思考中...")
+
+            _daily_stream_stop = [False]
+            _current_step_id = [0]
+
+            def _update_step_status(step_text):
+                report_text.config(state="normal")
+                tag_name = f"_step_{step_text}"
+                report_text.tag_configure(tag_name, font=("Microsoft YaHei", 11, "bold"),
+                                          foreground=THEME["accent"])
+                report_text.insert(tk.END, f"\n{step_text}\n", tag_name)
+                report_text.config(state="disabled")
+                report_text.see(tk.END)
+                win.update_idletasks()
+
+            _thinking_mark = "_thinking_start"
+            _thinking_mark_set = [False]
+
+            def _set_thinking_mark():
+                report_text.mark_set(_thinking_mark, tk.END + "-1c")
+                report_text.mark_gravity(_thinking_mark, tk.LEFT)
+                _thinking_mark_set[0] = True
+
+            def _update_thinking_preview(text, step_id):
+                if step_id != _current_step_id[0]:
+                    return
+                report_text.config(state="normal")
+                if _thinking_mark_set[0]:
+                    start_idx = report_text.index(_thinking_mark)
+                    end_idx = report_text.index(tk.END + "-1c")
+                    if start_idx != end_idx:
+                        report_text.delete(start_idx, end_idx)
+                report_text.insert(tk.END, text, "thinking")
+                report_text.config(state="disabled")
+                report_text.see(tk.END)
+
+            def _clear_thinking(step_id):
+                if step_id != _current_step_id[0]:
+                    return
+                report_text.config(state="normal")
+                if _thinking_mark_set[0]:
+                    start_idx = report_text.index(_thinking_mark)
+                    end_idx = report_text.index(tk.END + "-1c")
+                    if start_idx != end_idx:
+                        report_text.delete(start_idx, end_idx)
+                _thinking_mark_set[0] = False
+                report_text.config(state="disabled")
+
+            def _append_content(text):
+                report_text.config(state="normal")
+                report_text.insert(tk.END, text, "ai_summary")
+                report_text.config(state="disabled")
+                report_text.see(tk.END)
+
+            def _stream_step(api_key, model, stream_fn, step_label):
+                _current_step_id[0] += 1
+                step_id = _current_step_id[0]
+
+                win.after(0, lambda: _update_step_status(step_label))
+                win.after(0, lambda: _set_thinking_mark())
+
+                reasoning_buffer = ""
+                content_buffer = ""
+                has_output = False
+
+                for chunk_type, chunk_text in stream_fn(api_key, model):
+                    if _daily_stream_stop[0]:
+                        break
+                    if chunk_type == "reasoning":
+                        reasoning_buffer += chunk_text
+                        if not has_output:
+                            preview = reasoning_buffer[-300:] if len(reasoning_buffer) > 300 else reasoning_buffer
+                            win.after(0, lambda p=preview, sid=step_id: _update_thinking_preview(p, sid))
+                    elif chunk_type == "content":
+                        if not has_output:
+                            has_output = True
+                            win.after(0, lambda sid=step_id: _clear_thinking(sid))
+                        content_buffer += chunk_text
+                        win.after(0, lambda t=chunk_text: _append_content(t))
+
+                return content_buffer
+
+            def _stream_ao12_analysis(api_key, model, analyzers, which):
+                from openai import OpenAI
+
+                memory_text = self._build_memory_text() if self._use_memory_var.get() else ""
+                comparison_text = self._build_multi_comparison_text(analyzers) if self._use_memory_var.get() else ""
+                system_prompt, user_prompt = self._build_multi_analysis_prompts(
+                    analyzers, memory_text + comparison_text
+                )
+
+                count = len(analyzers)
+                multi_max_tokens = 4096 + count * 800
+                if multi_max_tokens > 16384:
+                    multi_max_tokens = 16384
+
+                client = OpenAI(api_key=api_key, base_url=SILICONFLOW_BASE_URL)
+                stream = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    stream=True,
+                    max_tokens=multi_max_tokens,
+                )
+                for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                        yield ("reasoning", delta.reasoning_content)
+                    elif delta.content:
+                        yield ("content", delta.content)
+
+            def _run():
+                try:
+                    summary_result = _stream_step(
+                        api_key, model,
+                        lambda ak, md: daily_report.call_ai_summary_stream(ak, md, stats),
+                        "⏳ 正在总结今日练习..."
+                    )
+                    ai_summary_holder["text"] = summary_result
+
+                    best_analysis = ""
+                    worst_analysis = ""
+
+                    if analyze_best:
+                        analyzers_best = _build_ao12_analyzers(stats, "best")
+                        if analyzers_best:
+                            best_analysis = _stream_step(
+                                api_key, model,
+                                lambda ak, md, a=analyzers_best: _stream_ao12_analysis(ak, md, a, "best"),
+                                "🏆 正在分析最佳Ao12..."
+                            )
+                        else:
+                            best_analysis = "最佳Ao12分析: 无法解析有效数据"
+                        ao12_analysis_holder["best"] = best_analysis
+
+                    if analyze_worst:
+                        analyzers_worst = _build_ao12_analyzers(stats, "worst")
+                        if analyzers_worst:
+                            worst_analysis = _stream_step(
+                                api_key, model,
+                                lambda ak, md, a=analyzers_worst: _stream_ao12_analysis(ak, md, a, "worst"),
+                                "📉 正在分析最差Ao12..."
+                            )
+                        else:
+                            worst_analysis = "最差Ao12分析: 无法解析有效数据"
+                        ao12_analysis_holder["worst"] = worst_analysis
+
+                    win.after(0, lambda: _on_ai_done(summary_result, best_analysis, worst_analysis))
+                except Exception as ex:
+                    win.after(0, lambda e=str(ex): _on_ai_error(e))
+
+            threading.Thread(target=_run, daemon=True).start()
+
+        def _build_ao12_analyzers(stats: Dict, which: str):
+            from analyzer import CFOPAnalyzer
+            from config import COLOR_CODES
+
+            ao12 = stats["ao12_results"]
+            group = ao12[which]
+            records = stats["records"]
+            start_idx = group["index"] - 1
+
+            analyzers = []
+            for j in range(12):
+                rec = records[start_idx + j]
+                scramble = rec["scramble"]
+                solution = rec["solution"]
+                bottom_name = rec["bottom_color"]
+                bottom_color = COLOR_CODES.get(bottom_name, bottom_name)
+                if not bottom_color or len(bottom_color) > 1:
+                    continue
+                try:
+                    analyzer = CFOPAnalyzer.from_bottom_color(scramble, solution, bottom_color)
+                    if analyzer.is_solve_complete():
+                        analyzers.append(analyzer)
+                except Exception:
+                    continue
+
+            return analyzers
+
+        def _on_ai_done(result, best_analysis, worst_analysis):
+            ai_btn.config(state="normal", text="🤖 AI总结")
+
+            report_text.config(state="normal")
+            report_text.delete("1.0", tk.END)
+            stats_text_new = daily_report.build_stats_text(stats)
+            for line in stats_text_new.split("\n"):
+                if line.startswith("📅"):
+                    report_text.insert(tk.END, line + "\n", "heading")
+                elif line.startswith("各阶段") or line.startswith("12次") or line.startswith("Ao12"):
+                    report_text.insert(tk.END, line + "\n", "section")
+                elif line.startswith("🏆") or line.startswith("📉"):
+                    report_text.insert(tk.END, line + "\n", "bold")
+                else:
+                    report_text.insert(tk.END, line + "\n", "normal")
+            report_text.insert(tk.END, "\n🤖 AI 总结\n", "section")
+            report_text.insert(tk.END, result + "\n", "ai_summary")
+
+            if best_analysis:
+                report_text.insert(tk.END, "\n🏆 最佳Ao12 AI分析\n", "section")
+                report_text.insert(tk.END, best_analysis + "\n", "ai_summary")
+            if worst_analysis:
+                report_text.insert(tk.END, "\n📉 最差Ao12 AI分析\n", "section")
+                report_text.insert(tk.END, worst_analysis + "\n", "ai_summary")
+
+            report_text.config(state="disabled")
+            report_text.see(tk.END)
+
+        def _on_ai_error(err):
+            ai_btn.config(state="normal", text="🤖 AI总结")
+            messagebox.showerror("AI总结失败", err, parent=win)
+
+        def do_save_pdf():
+            path = filedialog.asksaveasfilename(
+                parent=win,
+                defaultextension=".pdf",
+                filetypes=[("PDF文件", "*.pdf")],
+                initialfile=f"CFOP今日总结_{stats['date']}.pdf",
+            )
+            if not path:
+                return
+            try:
+                line_p = ""
+                hist_p = ""
+                try:
+                    line_p, hist_p = daily_report.generate_charts(stats["times"])
+                except Exception:
+                    pass
+                daily_report.save_pdf(stats, ai_summary_holder["text"],
+                                      line_p, hist_p, path,
+                                      ao12_best_analysis=ao12_analysis_holder["best"],
+                                      ao12_worst_analysis=ao12_analysis_holder["worst"])
+                messagebox.showinfo("保存成功", f"报告已保存至:\n{path}", parent=win)
+            except Exception as ex:
+                messagebox.showerror("保存失败", str(ex), parent=win)
+
+        ai_btn = ttk.Button(btn_frame, text="🤖 AI总结", command=do_ai_summary,
+                            style="Accent.TButton")
+        ai_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        pdf_btn = ttk.Button(btn_frame, text="📄 保存PDF", command=do_save_pdf,
+                             style="Secondary.TButton")
+        pdf_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        ttk.Button(btn_frame, text="关闭", command=win.destroy,
+                   style="Secondary.TButton").pack(side=tk.RIGHT)
     
     def _do_multi_analysis(self):
         api_key = self.api_key_entry.get().strip()

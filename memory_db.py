@@ -112,14 +112,23 @@ def _trimmed_mean(values: list, trim_pct: float = 0.05) -> float:
     return sum(trimmed) / len(trimmed)
 
 
-def get_averages(days: Optional[int] = None) -> Dict[str, Dict[str, float]]:
+def _std_dev(values: list) -> float:
+    if not values or len(values) < 2:
+        return 0.0
+    avg = sum(values) / len(values)
+    variance = sum((x - avg) ** 2 for x in values) / len(values)
+    return variance ** 0.5
+
+
+def get_averages(days: Optional[int] = None, limit: int = 1000) -> Dict[str, Dict[str, float]]:
     conn = _get_conn()
     c = conn.cursor()
     if days is not None:
         since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("SELECT id FROM records WHERE date >= ?", (since,))
+        c.execute("SELECT id FROM records WHERE date >= ? ORDER BY date DESC LIMIT ?",
+                  (since, limit))
     else:
-        c.execute("SELECT id FROM records")
+        c.execute("SELECT id FROM records ORDER BY date DESC LIMIT ?", (limit,))
     record_ids = [row[0] for row in c.fetchall()]
     if not record_ids:
         conn.close()
@@ -150,11 +159,15 @@ def get_averages(days: Optional[int] = None) -> Dict[str, Dict[str, float]]:
         result[phase] = {
             "count": cnt,
             "steps": round(_trimmed_mean(data["steps"]), 1),
+            "steps_std": round(_std_dev(data["steps"]), 1),
             "time": round(_trimmed_mean(data["time"]), 2),
+            "time_std": round(_std_dev(data["time"]), 2),
             "observation_time": round(_trimmed_mean(data["observation_time"]), 2),
+            "observation_time_std": round(_std_dev(data["observation_time"]), 2),
             "stutter_count": round(_trimmed_mean(data["stutter_count"]), 1),
             "wasted_moves": round(_trimmed_mean(data["wasted_moves"]), 1),
             "tps": round(_trimmed_mean(data["tps"]), 1),
+            "tps_std": round(_std_dev(data["tps"]), 1),
         }
     return result
 
@@ -173,19 +186,36 @@ def get_all_averages_by_period() -> Dict[str, Dict[str, Dict[str, float]]]:
     return result
 
 
-def get_total_time_avg(days: Optional[int] = None) -> Optional[float]:
+def get_total_time_avg(days: Optional[int] = None, limit: int = 1000) -> Optional[float]:
     conn = _get_conn()
     c = conn.cursor()
     if days is not None:
         since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("SELECT total_time FROM records WHERE date >= ?", (since,))
+        c.execute("SELECT total_time FROM records WHERE date >= ? ORDER BY date DESC LIMIT ?",
+                  (since, limit))
     else:
-        c.execute("SELECT total_time FROM records")
+        c.execute("SELECT total_time FROM records ORDER BY date DESC LIMIT ?", (limit,))
     values = [row[0] for row in c.fetchall() if row[0] is not None]
     conn.close()
     if not values:
         return None
     return round(_trimmed_mean(values), 2)
+
+
+def get_total_time_std(days: Optional[int] = None, limit: int = 1000) -> Optional[float]:
+    conn = _get_conn()
+    c = conn.cursor()
+    if days is not None:
+        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("SELECT total_time FROM records WHERE date >= ? ORDER BY date DESC LIMIT ?",
+                  (since, limit))
+    else:
+        c.execute("SELECT total_time FROM records ORDER BY date DESC LIMIT ?", (limit,))
+    values = [row[0] for row in c.fetchall() if row[0] is not None]
+    conn.close()
+    if not values or len(values) < 2:
+        return None
+    return round(_std_dev(values), 2)
 
 
 def get_pb() -> Optional[dict]:
@@ -372,3 +402,66 @@ def import_cstimer(file_path: str, progress_cb=None) -> dict:
         progress_cb(len(records), len(records))
 
     return results
+
+
+def get_today_records() -> List[Dict]:
+    today = datetime.now().strftime("%Y-%m-%d")
+    conn = _get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, date, scramble, solution, total_time, bottom_color "
+        "FROM records WHERE date LIKE ? ORDER BY date ASC",
+        (f"{today}%",)
+    )
+    records = []
+    for row in c.fetchall():
+        records.append({
+            "id": row[0], "date": row[1], "scramble": row[2],
+            "solution": row[3], "total_time": row[4], "bottom_color": row[5]
+        })
+    conn.close()
+    return records
+
+
+def get_today_phase_stats(record_ids: List[int]) -> Dict[str, Dict]:
+    if not record_ids:
+        return {}
+    conn = _get_conn()
+    c = conn.cursor()
+    placeholders = ",".join("?" * len(record_ids))
+    c.execute(
+        f"SELECT phase, steps, time, observation_time, stutter_count, wasted_moves, tps "
+        f"FROM phase_stats WHERE record_id IN ({placeholders})",
+        record_ids
+    )
+    phase_data = {}
+    for row in c.fetchall():
+        phase = row[0]
+        if phase not in phase_data:
+            phase_data[phase] = {"steps": [], "time": [], "observation_time": [],
+                                 "stutter_count": [], "wasted_moves": [], "tps": []}
+        phase_data[phase]["steps"].append(row[1])
+        phase_data[phase]["time"].append(row[2])
+        phase_data[phase]["observation_time"].append(row[3])
+        phase_data[phase]["stutter_count"].append(row[4])
+        phase_data[phase]["wasted_moves"].append(row[5])
+        phase_data[phase]["tps"].append(row[6])
+    conn.close()
+
+    result = {}
+    for phase, data in phase_data.items():
+        cnt = len(data["steps"])
+        result[phase] = {
+            "count": cnt,
+            "steps": round(_trimmed_mean(data["steps"]), 1),
+            "steps_std": round(_std_dev(data["steps"]), 1),
+            "time": round(_trimmed_mean(data["time"]), 2),
+            "time_std": round(_std_dev(data["time"]), 2),
+            "observation_time": round(_trimmed_mean(data["observation_time"]), 2),
+            "observation_time_std": round(_std_dev(data["observation_time"]), 2),
+            "stutter_count": round(_trimmed_mean(data["stutter_count"]), 1),
+            "wasted_moves": round(_trimmed_mean(data["wasted_moves"]), 1),
+            "tps": round(_trimmed_mean(data["tps"]), 1),
+            "tps_std": round(_std_dev(data["tps"]), 1),
+        }
+    return result
