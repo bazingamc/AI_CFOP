@@ -4,6 +4,7 @@ API与配置工具
 
 import os
 import json
+import base64
 import urllib.request
 from typing import List, Dict
 
@@ -11,6 +12,25 @@ from config import CONFIG_FILE
 
 
 SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
+
+_XOR_KEY = "AI_CFOP_2024"
+
+
+def _xor_encode(text: str) -> str:
+    data = text.encode("utf-8")
+    key = _XOR_KEY.encode("utf-8")
+    encrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+    return base64.b64encode(encrypted).decode("utf-8")
+
+
+def _xor_decode(encoded: str) -> str:
+    try:
+        data = base64.b64decode(encoded.encode("utf-8"))
+        key = _XOR_KEY.encode("utf-8")
+        decrypted = bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+        return decrypted.decode("utf-8")
+    except Exception:
+        return ""
 
 
 def fetch_models(api_key: str) -> List[str]:

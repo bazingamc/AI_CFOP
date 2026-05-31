@@ -7,6 +7,7 @@ from tkinter import ttk, scrolledtext, messagebox, filedialog
 from typing import List
 import threading
 import json
+import re
 import os
 from datetime import datetime
 
@@ -19,7 +20,7 @@ from config import (
 
 from analyzer import CFOPAnalyzer
 from move_utils import get_orientation_desc
-from api_utils import load_config, save_config, fetch_models
+from api_utils import load_config, save_config, fetch_models, _xor_encode, _xor_decode
 from markdown_renderer import configure_markdown_tags, render_markdown
 
 
@@ -52,6 +53,9 @@ class CFOPAnalyzerGUI:
         self._animation_text = ""
         self._animation_index = 0
         self._render_pending = False
+        self._clipboard_monitor_id = None
+        self._last_clipboard = ""
+        self._smart_paste_var = tk.BooleanVar(value=False)
 
         self._setup_styles()
         self._create_widgets()
@@ -174,19 +178,21 @@ class CFOPAnalyzerGUI:
             frame.pack(fill="both", expand=True)
             
             lines = text.split('\n')
-            max_line_width = max(len(line) for line in lines) if lines else 10
-            line_count = len(lines)
+            max_line_width = max(len(line) for line in lines if line.strip()) if lines else 10
             
-            text_width = min(max(max_line_width + 2, 30), 60)
-            text_height = min(max(line_count, 3), 15)
+            text_width = min(max(max_line_width + 2, 30), 55)
+            visible_height = 10
             
             text_widget = tk.Text(frame, font=("Microsoft YaHei", 9),
                                   bg="#ffffcc", fg=THEME["fg"],
                                   padx=8, pady=6, wrap=tk.WORD,
-                                  width=text_width, height=text_height, relief="flat",
+                                  width=text_width, height=visible_height, relief="flat",
                                   cursor="arrow")
-            text_widget.pack()
-            text_widget.insert("1.0", text)
+            scrollbar = tk.Scrollbar(frame, command=text_widget.yview, width=12)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            text_widget.config(yscrollcommand=scrollbar.set)
+            text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            text_widget.insert("1.0", text.strip())
             text_widget.config(state="normal")
             
             tooltip[0] = tip
@@ -214,7 +220,161 @@ class CFOPAnalyzerGUI:
         
         widget.bind("<Enter>", show_tooltip)
         widget.bind("<Leave>", hide_tooltip)
-    
+
+    def _on_smart_paste_toggle(self):
+        if self._smart_paste_var.get():
+            self._last_clipboard = ""
+            self._start_clipboard_monitor()
+        else:
+            self._stop_clipboard_monitor()
+
+    def _start_clipboard_monitor(self):
+        self._stop_clipboard_monitor()
+        self._poll_clipboard()
+
+    def _stop_clipboard_monitor(self):
+        if self._clipboard_monitor_id:
+            self.root.after_cancel(self._clipboard_monitor_id)
+            self._clipboard_monitor_id = None
+
+    def _poll_clipboard(self):
+        if not self._smart_paste_var.get():
+            return
+        try:
+            clipboard = self.root.clipboard_get()
+            if clipboard != self._last_clipboard:
+                self._last_clipboard = clipboard
+                scramble, solution = self._parse_cstimer_clipboard(clipboard)
+                if scramble or solution:
+                    self._do_smart_paste(scramble, solution)
+        except Exception:
+            pass
+        self._clipboard_monitor_id = self.root.after(500, self._poll_clipboard)
+
+    def _is_duplicate_paste(self, scramble, solution):
+        mode = self.analysis_mode_var.get()
+        if mode == '单组':
+            if scramble and self.scramble_entry.get().strip() == scramble:
+                return True
+            if solution and self.solution_text.get("1.0", tk.END).strip() == solution:
+                return True
+        else:
+            if not hasattr(self, 'multi_inputs') or not self.multi_inputs:
+                return False
+            for inp in self.multi_inputs:
+                if scramble and inp['scramble'].get().strip() == scramble:
+                    return True
+                if solution and inp['solution'].get().strip() == solution:
+                    return True
+        return False
+
+    def _do_smart_paste(self, scramble, solution):
+        if self._is_duplicate_paste(scramble, solution):
+            self._set_status("数据已存在，跳过粘贴")
+            self.root.after(2000, self._clear_status)
+            return
+
+        mode = self.analysis_mode_var.get()
+        if mode == '单组':
+            if scramble:
+                self.scramble_entry.delete(0, tk.END)
+                self.scramble_entry.insert(0, scramble)
+            if solution:
+                self.solution_text.delete("1.0", tk.END)
+                self.solution_text.insert("1.0", solution)
+            self._set_status("智能粘贴成功" if (scramble and solution) else "部分粘贴成功")
+            self.root.after(2000, self._clear_status)
+        else:
+            if not hasattr(self, 'multi_inputs') or not self.multi_inputs:
+                return
+            target = None
+            if scramble and not solution:
+                for inp in self.multi_inputs:
+                    if not inp['scramble'].get().strip():
+                        target = inp
+                        break
+            elif solution and not scramble:
+                for inp in self.multi_inputs:
+                    if inp['scramble'].get().strip() and not inp['solution'].get().strip():
+                        target = inp
+                        break
+            else:
+                for inp in self.multi_inputs:
+                    if not inp['scramble'].get().strip() and not inp['solution'].get().strip():
+                        target = inp
+                        break
+            if target is None:
+                if solution and not scramble:
+                    self._set_status("请先复制打乱公式")
+                    self.root.after(2000, self._clear_status)
+                    return
+                if len(self.multi_inputs) < 20:
+                    self._add_multi_row()
+                    target = self.multi_inputs[-1]
+                else:
+                    target = self.multi_inputs[-1]
+            if scramble:
+                target['scramble'].delete(0, tk.END)
+                target['scramble'].insert(0, scramble)
+            if solution:
+                target['solution'].delete(0, tk.END)
+                target['solution'].insert(0, solution)
+            self._set_status("智能粘贴成功")
+            self.root.after(2000, self._clear_status)
+
+    def _parse_cstimer_clipboard(self, text: str):
+        text = text.strip()
+        if not text:
+            return ("", "")
+
+        lines = [l.strip() for l in text.split('\n') if l.strip()]
+
+        scramble_lines = []
+        solution_lines = []
+        current_section = None
+
+        for line in lines:
+            if re.match(r'^\d+\.?\d*s?\s*([+]\d|DNF)?$', line, re.IGNORECASE):
+                continue
+            if re.match(r'^[第N]o\.?\d+', line, re.IGNORECASE):
+                continue
+
+            scramble_match = re.match(r'^(打乱公式?|Scramble)\s*[:：]\s*(.*)', line, re.IGNORECASE)
+            review_match = re.match(r'^(回顾|Review)\s*[:：]\s*(.*)', line, re.IGNORECASE)
+
+            if scramble_match:
+                current_section = 'scramble'
+                content = scramble_match.group(2).strip()
+                if content:
+                    scramble_lines.append(content)
+                continue
+
+            if review_match:
+                current_section = 'solution'
+                content = review_match.group(2).strip()
+                if content:
+                    solution_lines.append(content)
+                continue
+
+            has_timestamp = bool(re.search(r'@\d+\.?\d*', line))
+
+            if has_timestamp:
+                solution_lines.append(line)
+                current_section = 'solution'
+            elif current_section == 'scramble':
+                scramble_lines.append(line)
+            elif current_section == 'solution':
+                solution_lines.append(line)
+            else:
+                if re.match(r'^[RULDFBMSrwuldfbmsxyz]([2\']?w?\s|$)', line):
+                    scramble_lines.append(line)
+                    current_section = 'scramble'
+
+        scramble = ' '.join(scramble_lines).strip()
+        solution = ' '.join(solution_lines).strip()
+
+        return (scramble, solution)
+
     def _show_guide_dialog(self, is_startup=True):
         if is_startup:
             config = load_config()
@@ -322,6 +482,16 @@ class CFOPAnalyzerGUI:
         ttk.Label(input_header, text="  输入参数", font=("Microsoft YaHei", 10, "bold"),
                   foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
         self._create_help_icon(input_header, "input").pack(side=tk.LEFT, padx=(4, 0))
+        self.smart_paste_cb = tk.Checkbutton(input_header, text="📋 智能粘贴",
+                                              variable=self._smart_paste_var,
+                                              command=self._on_smart_paste_toggle,
+                                              bg=THEME["bg"], fg=THEME["fg"],
+                                              selectcolor=THEME["card_bg"],
+                                              activebackground=THEME["bg"],
+                                              activeforeground=THEME["accent"],
+                                              font=("Microsoft YaHei", 9))
+        self.smart_paste_cb.pack(side=tk.RIGHT, padx=(0, 2))
+        self._create_help_icon(input_header, "smart_paste").pack(side=tk.RIGHT, padx=(0, 4))
         
         mode_frame = tk.Frame(main_frame, bg=THEME["card_bg"], padx=12, pady=8,
                               highlightthickness=1, highlightbackground=THEME["border"])
@@ -734,11 +904,16 @@ class CFOPAnalyzerGUI:
             self.analysis_mode_var.set(saved_mode)
         
         if config.get("api_key"):
-            self.api_key_entry.insert(0, config["api_key"])
+            decrypted = _xor_decode(config["api_key"])
+            self.api_key_entry.insert(0, decrypted if decrypted else config["api_key"])
         if config.get("model"):
             self.model_var.set(config["model"])
         if config.get("models"):
             self.model_combo["values"] = config["models"]
+
+        if config.get("smart_paste", False):
+            self._smart_paste_var.set(True)
+            self._start_clipboard_monitor()
         
         mode = self.analysis_mode_var.get()
         if mode == '多组':
@@ -762,7 +937,7 @@ class CFOPAnalyzerGUI:
         
         try:
             config = load_config()
-            config["api_key"] = self.api_key_entry.get().strip()
+            config["api_key"] = _xor_encode(self.api_key_entry.get().strip())
         except Exception:
             pass
         try:
@@ -773,6 +948,10 @@ class CFOPAnalyzerGUI:
             config["models"] = list(self.model_combo["values"]) if self.model_combo["values"] else []
         except Exception:
             pass
+        try:
+            config["smart_paste"] = self._smart_paste_var.get()
+        except Exception:
+            pass
         save_config(config)
     
     def _on_close(self):
@@ -780,6 +959,7 @@ class CFOPAnalyzerGUI:
         self._save_current_config()
         self._clear_status()
         self._stream_stop = True
+        self._stop_clipboard_monitor()
         self.root.destroy()
     
     def _clear(self):
@@ -1096,16 +1276,20 @@ class CFOPAnalyzerGUI:
         bottom_color = self._get_bottom_color_from_name(bottom_name)
         
         if not bottom_color:
+            self._reset_analysis_ui()
             messagebox.showwarning("错误", "请选择有效的底色")
             return
         
         if not scramble or not solution:
+            self._reset_analysis_ui()
             messagebox.showwarning("警告", "请先输入打乱公式和还原步骤！")
             return
         if not api_key:
+            self._reset_analysis_ui()
             messagebox.showwarning("警告", "请输入API Key！")
             return
         if not model:
+            self._reset_analysis_ui()
             messagebox.showwarning("警告", "请选择模型！")
             return
         
@@ -1282,13 +1466,16 @@ class CFOPAnalyzerGUI:
         model = self.model_var.get()
         
         if not api_key:
+            self._reset_analysis_ui()
             messagebox.showwarning("警告", "请输入API Key！")
             return
         if not model:
+            self._reset_analysis_ui()
             messagebox.showwarning("警告", "请选择模型！")
             return
         
         if not hasattr(self, 'multi_inputs') or not self.multi_inputs:
+            self._reset_analysis_ui()
             messagebox.showwarning("警告", "请先输入数据！")
             return
         
@@ -1300,10 +1487,12 @@ class CFOPAnalyzerGUI:
             bottom_color = self._get_bottom_color_from_name(bottom_name)
             
             if not bottom_color:
+                self._reset_analysis_ui()
                 messagebox.showwarning("警告", f"第 {i+1} 组底色无效，请检查！")
                 return
             
             if not scramble or not solution:
+                self._reset_analysis_ui()
                 messagebox.showwarning("警告", f"第 {i+1} 组数据不完整，请检查！")
                 return
             
