@@ -38,7 +38,7 @@ class CFOPAnalyzerGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("AI_CFOP（V1.0，交流QQ群:322267527）")
+        self.root.title("AI_CFOP V1.0")
         self.root.geometry("960x980")
         self.root.resizable(True, True)
         self.root.configure(bg=THEME["bg"])
@@ -119,8 +119,8 @@ class CFOPAnalyzerGUI:
         dialog.grab_set()
         dialog.protocol("WM_DELETE_WINDOW", lambda: self._on_user_dialog_close(dialog))
 
-        dialog_width = 480
-        dialog_height = 420
+        dialog_width = 500
+        dialog_height = 520
         dialog.geometry(f"{dialog_width}x{dialog_height}")
         dialog.update_idletasks()
         x = (dialog.winfo_screenwidth() - dialog_width) // 2
@@ -179,6 +179,23 @@ class CFOPAnalyzerGUI:
                                         style="Accent.TButton")
                 select_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
+                edit_btn = tk.Button(row, text="✏️", width=3,
+                                     font=("Microsoft YaHei", 9),
+                                     fg="#fff", bg=THEME["accent"],
+                                     activebackground="#5B8DEE",
+                                     relief="flat", cursor="hand2",
+                                     command=lambda uid=u["id"], uname=u["username"]: self._show_edit_user_dialog(dialog, uid, uname, refresh_user_list))
+                edit_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+                if u["id"] != self._current_user_id:
+                    del_btn = tk.Button(row, text="🗑", width=3,
+                                        font=("Microsoft YaHei", 9),
+                                        fg="#fff", bg=THEME["danger"],
+                                        activebackground="#d63031",
+                                        relief="flat", cursor="hand2",
+                                        command=lambda uid=u["id"]: self._delete_user_confirm(uid, refresh_user_list))
+                    del_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
         def _add_default_avatar(parent):
             default_path = user_manager.get_default_avatar_path()
             if os.path.isfile(default_path):
@@ -206,12 +223,7 @@ class CFOPAnalyzerGUI:
         create_btn = ttk.Button(btn_frame, text="➕ 创建用户",
                                 command=lambda: self._show_create_user_dialog(dialog, refresh_user_list),
                                 style="Accent.TButton")
-        create_btn.pack(side=tk.LEFT, padx=(0, 8))
-
-        manage_btn = ttk.Button(btn_frame, text="⚙️ 管理用户",
-                                command=lambda: self._show_user_manage_dialog(dialog, refresh_user_list),
-                                style="Secondary.TButton")
-        manage_btn.pack(side=tk.LEFT)
+        create_btn.pack(side=tk.LEFT)
 
     def _on_user_selected(self, user_id: int, dialog):
         user = user_manager.get_user(user_id)
@@ -238,15 +250,15 @@ class CFOPAnalyzerGUI:
         dialog.title("创建用户")
         dialog.configure(bg=THEME["bg"])
         dialog.resizable(False, False)
-        dialog.transient(parent)
+        dialog.attributes('-topmost', True)
         dialog.grab_set()
 
-        dialog_width = 380
-        dialog_height = 200
+        dialog_width = 400
+        dialog_height = 240
         dialog.geometry(f"{dialog_width}x{dialog_height}")
         dialog.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() - dialog_width) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - dialog_height) // 2
+        x = (dialog.winfo_screenwidth() - dialog_width) // 2
+        y = (dialog.winfo_screenheight() - dialog_height) // 2
         dialog.geometry(f"+{x}+{y}")
 
         main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=20, pady=16)
@@ -301,15 +313,15 @@ class CFOPAnalyzerGUI:
         dialog.title("用户管理")
         dialog.configure(bg=THEME["bg"])
         dialog.resizable(False, False)
-        dialog.transient(parent)
+        dialog.attributes('-topmost', True)
         dialog.grab_set()
 
-        dialog_width = 480
-        dialog_height = 400
+        dialog_width = 500
+        dialog_height = 480
         dialog.geometry(f"{dialog_width}x{dialog_height}")
         dialog.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() - dialog_width) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - dialog_height) // 2
+        x = (dialog.winfo_screenwidth() - dialog_width) // 2
+        y = (dialog.winfo_screenheight() - dialog_height) // 2
         dialog.geometry(f"+{x}+{y}")
 
         main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=16, pady=12)
@@ -339,11 +351,33 @@ class CFOPAnalyzerGUI:
                 row = tk.Frame(scroll_frame, bg=THEME["card_bg"], pady=4)
                 row.pack(fill=tk.X, padx=4, pady=2)
 
+                avatar_path = u.get("avatar", "")
+                if avatar_path and os.path.isfile(avatar_path):
+                    try:
+                        from PIL import Image as PILImage, ImageTk
+                        img = PILImage.open(avatar_path).resize((32, 32), PILImage.LANCZOS)
+                        photo = ImageTk.PhotoImage(img)
+                        avatar_lbl = tk.Label(row, image=photo, bg=THEME["card_bg"])
+                        avatar_lbl.image = photo
+                        avatar_lbl.pack(side=tk.LEFT, padx=(0, 8))
+                    except Exception:
+                        _add_small_avatar(row)
+                else:
+                    _add_small_avatar(row)
+
                 current_mark = " ✓" if u["id"] == self._current_user_id else ""
                 name_lbl = tk.Label(row, text=u["username"] + current_mark,
                                     font=("Microsoft YaHei", 11),
                                     fg=THEME["fg"], bg=THEME["card_bg"])
                 name_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+                edit_btn = tk.Button(row, text="✏️", width=3,
+                                     font=("Microsoft YaHei", 9),
+                                     fg="#fff", bg=THEME["accent"],
+                                     activebackground="#5B8DEE",
+                                     relief="flat", cursor="hand2",
+                                     command=lambda uid=u["id"], uname=u["username"]: self._show_edit_user_dialog(dialog, uid, uname, refresh_list))
+                edit_btn.pack(side=tk.RIGHT, padx=(4, 0))
 
                 if u["id"] != self._current_user_id:
                     del_btn = tk.Button(row, text="删除", width=4,
@@ -353,6 +387,23 @@ class CFOPAnalyzerGUI:
                                         relief="flat", cursor="hand2",
                                         command=lambda uid=u["id"]: self._delete_user_confirm(uid, refresh_list))
                     del_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+        def _add_small_avatar(parent):
+            default_path = user_manager.get_default_avatar_path()
+            if os.path.isfile(default_path):
+                try:
+                    from PIL import Image as PILImage, ImageTk
+                    img = PILImage.open(default_path).resize((32, 32), PILImage.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    lbl = tk.Label(parent, image=photo, bg=THEME["card_bg"])
+                    lbl.image = photo
+                    lbl.pack(side=tk.LEFT, padx=(0, 8))
+                    return
+                except Exception:
+                    pass
+            c = tk.Canvas(parent, width=32, height=32, highlightthickness=0, bg=THEME["accent"])
+            c.create_text(16, 16, text="👤", font=("Microsoft YaHei", 12), fill="white")
+            c.pack(side=tk.LEFT, padx=(0, 8))
 
         refresh_list()
 
@@ -366,19 +417,213 @@ class CFOPAnalyzerGUI:
                    command=lambda: (on_changed() if on_changed else None, dialog.destroy()),
                    style="Secondary.TButton").pack(side=tk.RIGHT)
 
+    def _show_edit_user_dialog(self, parent, user_id: int, current_name: str, on_done=None):
+        dialog = tk.Toplevel(parent)
+        dialog.title("修改用户")
+        dialog.configure(bg=THEME["bg"])
+        dialog.resizable(False, False)
+        dialog.attributes('-topmost', True)
+        dialog.grab_set()
+
+        dialog_width = 420
+        dialog_height = 280
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() - dialog_width) // 2
+        y = (dialog.winfo_screenheight() - dialog_height) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=20, pady=16)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        tk.Label(main_frame, text="修改用户信息",
+                 font=("Microsoft YaHei", 13, "bold"),
+                 fg=THEME["accent"], bg=THEME["card_bg"]).grid(row=0, column=0, columnspan=3, pady=(0, 12), sticky=tk.W)
+
+        tk.Label(main_frame, text="用户名:", bg=THEME["card_bg"],
+                 fg=THEME["fg"], font=("Microsoft YaHei", 10)).grid(row=1, column=0, sticky=tk.W, pady=8)
+        name_entry = tk.Entry(main_frame, width=18, font=("Microsoft YaHei", 10),
+                              bg=THEME["input_bg"], fg=THEME["fg"],
+                              relief="flat", highlightthickness=1,
+                              highlightbackground=THEME["border"],
+                              highlightcolor=THEME["accent"])
+        name_entry.insert(0, current_name)
+        name_entry.grid(row=1, column=1, sticky=tk.EW, pady=8, padx=(8, 0))
+
+        random_btn = ttk.Button(main_frame, text="🎲",
+                                command=lambda: name_entry.delete(0, tk.END) or name_entry.insert(0, user_manager.generate_random_username()),
+                                style="Secondary.TButton")
+        random_btn.grid(row=1, column=2, padx=(8, 0), pady=8)
+
+        tk.Label(main_frame, text="头像:", bg=THEME["card_bg"],
+                 fg=THEME["fg"], font=("Microsoft YaHei", 10)).grid(row=2, column=0, sticky=tk.W, pady=8)
+
+        avatar_preview_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        avatar_preview_frame.grid(row=2, column=1, columnspan=2, sticky=tk.W, pady=8, padx=(8, 0))
+
+        user_info = user_manager.get_user(user_id)
+        current_avatar = user_info.get("avatar", "") if user_info else ""
+        avatar_preview = tk.Canvas(avatar_preview_frame, width=48, height=48,
+                                    highlightthickness=1, highlightbackground=THEME["border"],
+                                    bg=THEME["card_bg"], cursor="hand2")
+        avatar_preview.pack(side=tk.LEFT, padx=(0, 8))
+
+        _avatar_photo = [None]
+
+        def _update_avatar_preview(image_path):
+            avatar_preview.delete("all")
+            if image_path and os.path.isfile(image_path):
+                try:
+                    from PIL import Image as PILImage, ImageTk
+                    img = PILImage.open(image_path).resize((48, 48), PILImage.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    _avatar_photo[0] = photo
+                    avatar_preview.create_image(24, 24, image=photo)
+                    return
+                except Exception:
+                    pass
+            default_path = user_manager.get_default_avatar_path()
+            if os.path.isfile(default_path):
+                try:
+                    from PIL import Image as PILImage, ImageTk
+                    img = PILImage.open(default_path).resize((48, 48), PILImage.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    _avatar_photo[0] = photo
+                    avatar_preview.create_image(24, 24, image=photo)
+                    return
+                except Exception:
+                    pass
+            avatar_preview.create_text(24, 24, text="👤", font=("Microsoft YaHei", 18), fill=THEME["accent"])
+
+        _update_avatar_preview(current_avatar)
+
+        new_avatar_path = [current_avatar]
+
+        def _choose_avatar():
+            dialog.grab_release()
+            dialog.attributes('-topmost', False)
+            dialog.lower()
+            self.root.update()
+            path = filedialog.askopenfilename(
+                title="选择头像图片",
+                filetypes=[("图片文件", "*.png *.jpg *.jpeg *.gif *.bmp"), ("所有文件", "*.*")]
+            )
+            dialog.attributes('-topmost', True)
+            dialog.lift()
+            dialog.grab_set()
+            if path:
+                new_avatar_path[0] = path
+                _update_avatar_preview(path)
+
+        avatar_preview.bind("<Button-1>", lambda e: _choose_avatar())
+
+        choose_btn = ttk.Button(avatar_preview_frame, text="选择图片",
+                                command=_choose_avatar, style="Secondary.TButton")
+        choose_btn.pack(side=tk.LEFT)
+
+        error_label = tk.Label(main_frame, text="", bg=THEME["card_bg"],
+                               fg=THEME["danger"], font=("Microsoft YaHei", 9))
+        error_label.grid(row=3, column=0, columnspan=3, sticky=tk.W, pady=(0, 4))
+
+        btn_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        btn_frame.grid(row=4, column=0, columnspan=3, pady=(8, 0))
+
+        def on_save():
+            username = name_entry.get().strip()
+            if not username:
+                error_label.config(text="用户名不能为空")
+                return
+            if username != current_name and user_manager.check_username_exists(username, exclude_id=user_id):
+                error_label.config(text="用户名已存在")
+                return
+            user_manager.update_user(user_id, username=username, avatar=new_avatar_path[0])
+            if user_id == self._current_user_id:
+                self._current_username = username
+                self._update_user_display()
+            dialog.destroy()
+            if on_done:
+                on_done()
+
+        ttk.Button(btn_frame, text="保存", command=on_save,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy,
+                   style="Secondary.TButton").pack(side=tk.LEFT)
+
+        main_frame.columnconfigure(1, weight=1)
+
     def _delete_user_confirm(self, user_id: int, on_done=None):
         user = user_manager.get_user(user_id)
         if not user:
             return
-        if not messagebox.askyesno("确认删除", f"确定删除用户「{user['username']}」？\n该用户的所有数据将被删除，此操作不可撤销！"):
-            return
-        user_manager.delete_user(user_id)
-        if on_done:
-            on_done()
+        confirm = tk.Toplevel(self.root)
+        confirm.title("确认删除")
+        confirm.configure(bg=THEME["bg"])
+        confirm.resizable(False, False)
+        confirm.attributes('-topmost', True)
+        confirm.grab_set()
+
+        confirm_width = 360
+        confirm_height = 160
+        confirm.geometry(f"{confirm_width}x{confirm_height}")
+        confirm.update_idletasks()
+        x = (confirm.winfo_screenwidth() - confirm_width) // 2
+        y = (confirm.winfo_screenheight() - confirm_height) // 2
+        confirm.geometry(f"+{x}+{y}")
+
+        frame = tk.Frame(confirm, bg=THEME["card_bg"], padx=20, pady=16)
+        frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        tk.Label(frame, text=f"确定删除用户「{user['username']}」？",
+                 font=("Microsoft YaHei", 11), bg=THEME["card_bg"],
+                 fg=THEME["fg"]).pack(pady=(0, 4))
+        tk.Label(frame, text="该用户的所有数据将被删除，此操作不可撤销！",
+                 font=("Microsoft YaHei", 9), bg=THEME["card_bg"],
+                 fg=THEME["danger"]).pack(pady=(0, 12))
+
+        btn_frame = tk.Frame(frame, bg=THEME["card_bg"])
+        btn_frame.pack()
+
+        def do_delete():
+            user_manager.delete_user(user_id)
+            confirm.destroy()
+            if on_done:
+                on_done()
+
+        ttk.Button(btn_frame, text="删除", command=do_delete,
+                   style="Danger.TButton").pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Button(btn_frame, text="取消", command=confirm.destroy,
+                   style="Secondary.TButton").pack(side=tk.LEFT)
 
     def _update_user_display(self):
         if hasattr(self, '_user_label'):
-            self._user_label.config(text=f"👤 {self._current_username}")
+            self._user_label.config(text=self._current_username)
+        if hasattr(self, '_user_avatar_canvas'):
+            self._user_avatar_canvas.delete("all")
+            default_path = user_manager.get_default_avatar_path()
+            user_info = user_manager.get_user(self._current_user_id) if self._current_user_id else None
+            avatar_path = user_info.get("avatar", "") if user_info else ""
+            if avatar_path and os.path.isfile(avatar_path):
+                try:
+                    from PIL import Image as PILImage, ImageTk
+                    img = PILImage.open(avatar_path).resize((28, 28), PILImage.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    self._user_avatar_canvas.create_image(14, 14, image=photo)
+                    self._user_avatar_canvas._avatar_photo = photo
+                    return
+                except Exception:
+                    pass
+            if os.path.isfile(default_path):
+                try:
+                    from PIL import Image as PILImage, ImageTk
+                    img = PILImage.open(default_path).resize((28, 28), PILImage.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    self._user_avatar_canvas.create_image(14, 14, image=photo)
+                    self._user_avatar_canvas._avatar_photo = photo
+                    return
+                except Exception:
+                    pass
+            self._user_avatar_canvas.create_text(14, 14, text="👤",
+                                                  font=("Microsoft YaHei", 12), fill="white")
 
     def _switch_user(self):
         self._show_user_select_dialog()
@@ -459,10 +704,10 @@ class CFOPAnalyzerGUI:
         self.root.update_idletasks()
         memory_db.init_db()
         self._update_memory_count()
+        self._refresh_home_stats()
         if self._smart_paste_var.get():
             self._start_clipboard_monitor()
         self._set_all_controls_state("normal")
-        self.root.after(100, lambda: self._show_guide_dialog(True))
 
     def _set_all_controls_state(self, state: str):
         try:
@@ -492,6 +737,8 @@ class CFOPAnalyzerGUI:
                         inp['orientation_combo'].config(state="readonly" if state == "normal" else state)
                     if 'delete_btn' in inp:
                         inp['delete_btn'].config(state=state)
+        except tk.TclError:
+            pass
         except Exception as ex:
             if log:
                 log.debug(f"设置控件状态异常: {ex}")
@@ -536,6 +783,13 @@ class CFOPAnalyzerGUI:
         
         style.configure("Status.TLabel", background=THEME["bg"], foreground=THEME["danger"],
                         font=("Microsoft YaHei", 10, "bold"))
+        
+        style.configure("TNotebook", background=THEME["bg"], borderwidth=0)
+        style.configure("TNotebook.Tab", font=("Microsoft YaHei", 10),
+                        padding=[16, 6])
+        style.map("TNotebook.Tab",
+                  background=[("selected", THEME["card_bg"]), ("!selected", THEME["bg"])],
+                  foreground=[("selected", THEME["accent"]), ("!selected", THEME["fg"])])
     
     def _create_help_icon(self, parent, help_key):
         help_text = HELP_TEXTS.get(help_key, "")
@@ -845,7 +1099,8 @@ class CFOPAnalyzerGUI:
 
     def _update_memory_count(self):
         count = memory_db.get_record_count()
-        self._memory_count_label.config(text=f"📝{count}" if count > 0 else "")
+        if hasattr(self, '_memory_count_label'):
+            self._memory_count_label.config(text=f"📝{count}条记录" if count > 0 else "暂无记录")
 
     def _on_stats_manage_click(self, event):
         x = event.x
@@ -906,8 +1161,8 @@ class CFOPAnalyzerGUI:
             pass
         
         self._update_memory_count()
-        if self._stats_expanded:
-            self._refresh_stats_panel()
+        if hasattr(self, '_refresh_home_stats'):
+            self._refresh_home_stats()
         
         if "error" in result:
             messagebox.showerror("导入失败", f"导入过程中出错:\n{result['error']}")
@@ -929,10 +1184,11 @@ class CFOPAnalyzerGUI:
         messagebox.showinfo("导入结果", msg)
 
     def _export_memory(self):
+        username = self._current_username or "unknown"
         path = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV文件", "*.csv")],
-            initialfile=f"cfop_memory_{datetime.now().strftime('%Y%m%d')}.csv"
+            initialfile=f"cfop_{username}_{datetime.now().strftime('%Y%m%d')}.csv"
         )
         if not path:
             return
@@ -951,8 +1207,8 @@ class CFOPAnalyzerGUI:
             return
         memory_db.clear_all()
         self._update_memory_count()
-        if self._stats_expanded:
-            self._refresh_stats_panel()
+        if hasattr(self, '_refresh_home_stats'):
+            self._refresh_home_stats()
         self._set_status("记忆数据已清除")
         self.root.after(2000, self._clear_status)
 
@@ -1017,7 +1273,10 @@ class CFOPAnalyzerGUI:
 • 自动识别CFOP各阶段
 • 计算观察时间和执行时间
 • 定位卡顿点
-• 生成训练建议"""
+• 生成训练建议
+
+【交流反馈】
+• 交流QQ群：322267527"""
         
         text_widget = scrolledtext.ScrolledText(main_frame, width=55, height=16,
                                                 font=("Microsoft YaHei", 10),
@@ -1055,181 +1314,266 @@ class CFOPAnalyzerGUI:
         close_btn.pack(pady=(12, 0))
     
     def _create_widgets(self):
-        main_frame = ttk.Frame(self.root, padding="12")
-        main_frame.pack(fill=tk.BOTH, expand=True)
-        
-        input_header = ttk.Frame(main_frame)
-        input_header.pack(fill=tk.X, pady=(0, 2))
+        top_bar = tk.Frame(self.root, bg=THEME["card_bg"], padx=12, pady=6,
+                           highlightthickness=0)
+        top_bar.pack(fill=tk.X)
+
+        tk.Label(top_bar, text="AI_CFOP", font=("Microsoft YaHei", 14, "bold"),
+                 fg=THEME["accent"], bg=THEME["card_bg"]).pack(side=tk.LEFT)
+
+        self._user_area = tk.Frame(top_bar, bg=THEME["card_bg"], cursor="hand2")
+        self._user_area.pack(side=tk.RIGHT, padx=(0, 4))
+
+        self._user_avatar_canvas = tk.Canvas(self._user_area, width=28, height=28,
+                                              highlightthickness=0, bg=THEME["accent"], cursor="hand2")
+        self._user_avatar_canvas.pack(side=tk.LEFT, padx=(0, 6))
+        self._user_avatar_canvas.create_text(14, 14, text="👤",
+                                              font=("Microsoft YaHei", 12), fill="white")
+        self._user_avatar_canvas.bind("<Button-1>", lambda e: self._show_user_manage_from_topbar())
+
+        self._user_label = tk.Label(self._user_area, text=f"👤 {self._current_username}",
+                                     font=("Microsoft YaHei", 10),
+                                     bg=THEME["card_bg"], fg=THEME["fg"])
+        self._user_label.pack(side=tk.LEFT)
+        self._user_area.bind("<Button-1>", lambda e: self._show_user_manage_from_topbar())
+        self._user_label.bind("<Button-1>", lambda e: self._show_user_manage_from_topbar())
+        self._create_tooltip(self._user_area, "点击管理用户")
+
+        self._notebook = ttk.Notebook(self.root)
+        self._notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        self._tab_home = ttk.Frame(self._notebook)
+        self._tab_analysis = ttk.Frame(self._notebook)
+        self._tab_settings = ttk.Frame(self._notebook)
+        self._tab_help = ttk.Frame(self._notebook)
+
+        self._notebook.add(self._tab_home, text="  🏠 首页  ")
+        self._notebook.add(self._tab_analysis, text="  🔬 深度分析  ")
+        self._notebook.add(self._tab_settings, text="  ⚙️ 设置  ")
+        self._notebook.add(self._tab_help, text="  ❓ 帮助  ")
+
+        self._build_home_tab()
+        self._build_analysis_tab()
+        self._build_settings_tab()
+        self._build_help_tab()
+
+    def _show_user_manage_from_topbar(self):
+        self._show_user_select_dialog()
+
+    def _build_home_tab(self):
+        tab = self._tab_home
+
+        stats_header = ttk.Frame(tab)
+        stats_header.pack(fill=tk.X, pady=(8, 2), padx=8)
+        ttk.Label(stats_header, text="  📊 水平统计", font=("Microsoft YaHei", 11, "bold"),
+                  foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
+
+        self._home_stats_panel = tk.Frame(tab, bg=THEME["card_bg"], padx=12, pady=8,
+                                           highlightthickness=1, highlightbackground=THEME["border"])
+        self._home_stats_panel.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+        self._home_stats_text = tk.Text(self._home_stats_panel, font=("Consolas", 9),
+                                         bg=THEME["card_bg"], fg=THEME["fg"],
+                                         height=18, wrap=tk.NONE, relief="flat",
+                                         cursor="arrow", state="disabled",
+                                         selectbackground=THEME["accent"],
+                                         selectforeground="white")
+        self._home_stats_text.tag_configure("bold", font=("Consolas", 9, "bold"))
+        self._home_stats_text.tag_configure("highlight_label", font=("Consolas", 11, "bold"), foreground="#4A90D9")
+        self._home_stats_text.tag_configure("highlight_value", font=("Consolas", 13, "bold"), foreground="#2E6FBA")
+        self._home_stats_scroll_y = tk.Scrollbar(self._home_stats_panel, command=self._home_stats_text.yview, width=10)
+        self._home_stats_scroll_x = tk.Scrollbar(self._home_stats_panel, command=self._home_stats_text.xview,
+                                                  orient=tk.HORIZONTAL, width=10)
+        self._home_stats_text.config(yscrollcommand=self._home_stats_scroll_y.set,
+                                      xscrollcommand=self._home_stats_scroll_x.set)
+        self._home_stats_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
+        self._home_stats_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
+        self._home_stats_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        data_header = ttk.Frame(tab)
+        data_header.pack(fill=tk.X, pady=(0, 2), padx=8)
+        ttk.Label(data_header, text="  📂 数据管理", font=("Microsoft YaHei", 11, "bold"),
+                  foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
+        self._memory_count_label = ttk.Label(data_header, text="", style="Status.TLabel")
+        self._memory_count_label.pack(side=tk.RIGHT, padx=(8, 0))
+
+        data_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=12, pady=12,
+                               highlightthickness=1, highlightbackground=THEME["border"])
+        data_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+        btn_row1 = tk.Frame(data_frame, bg=THEME["card_bg"])
+        btn_row1.pack(fill=tk.X, pady=(0, 8))
+
+        ttk.Button(btn_row1, text="📂 导入csTimer数据", command=self._import_cstimer,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row1, text="📊 导出CSV", command=self._export_memory,
+                   style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row1, text="🗑 清除数据", command=self._clear_memory,
+                   style="Danger.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row1, text="🔄 刷新统计", command=self._refresh_home_stats,
+                   style="Secondary.TButton").pack(side=tk.LEFT)
+
+        train_header = ttk.Frame(tab)
+        train_header.pack(fill=tk.X, pady=(0, 2), padx=8)
+        ttk.Label(train_header, text="  🎯 智能训练", font=("Microsoft YaHei", 11, "bold"),
+                  foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
+
+        train_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=12, pady=12,
+                                highlightthickness=1, highlightbackground=THEME["border"])
+        train_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+        ttk.Button(train_frame, text="📊 今日训练总结", command=self._show_daily_report,
+                   style="Accent.TButton").pack(side=tk.LEFT)
+
+        self._refresh_home_stats()
+
+    def _refresh_home_stats(self):
+        from config import PHASE_ORDER
+        avg = memory_db.get_averages()
+        text_widget = self._home_stats_text
+
+        if not avg:
+            text_widget.config(state="normal")
+            text_widget.delete("1.0", tk.END)
+            text_widget.insert("1.0", "暂无数据，完成分析后自动记录")
+            text_widget.config(state="disabled")
+            return
+
+        sep = "─" * 80
+
+        text_widget.config(state="normal")
+        text_widget.delete("1.0", tk.END)
+
+        pb = memory_db.get_pb()
+        total_avg = memory_db.get_total_time_avg()
+        total_std = memory_db.get_total_time_std()
+        total_tps_avg = memory_db.get_total_tps_avg()
+        total_tps_std = memory_db.get_total_tps_std()
+
+        if pb:
+            text_widget.insert(tk.END, "PB: ", "highlight_label")
+            text_widget.insert(tk.END, f"{pb['time']:.2f}s", "highlight_value")
+            text_widget.insert(tk.END, f" ({pb['date']})\n")
+        if total_avg:
+            text_widget.insert(tk.END, "近1000次平均: ", "highlight_label")
+            text_widget.insert(tk.END, f"{total_avg:.2f}s", "highlight_value")
+            if total_std:
+                text_widget.insert(tk.END, "  标准差: ", "highlight_label")
+                text_widget.insert(tk.END, f"{total_std:.2f}s", "highlight_value")
+            if total_tps_avg:
+                text_widget.insert(tk.END, "  TPS: ", "highlight_label")
+                text_widget.insert(tk.END, f"{total_tps_avg:.1f}", "highlight_value")
+                if total_tps_std:
+                    text_widget.insert(tk.END, f"(σ{total_tps_std:.1f})", "highlight_value")
+            text_widget.insert(tk.END, "\n")
+
+        if pb or total_avg:
+            text_widget.insert(tk.END, sep + "\n")
+
+        text_widget.insert(tk.END, f"阶段\t步数(σ)\t用时(s)(σ)\t观察(s)(σ)\t卡顿\t废步\tTPS(σ)\n")
+        text_widget.insert(tk.END, sep + "\n")
+
+        phase_labels = {
+            "cross": "Cross", "f2l1": "F2L-1", "f2l2": "F2L-2",
+            "f2l3": "F2L-3", "f2l4": "F2L-4", "oll": "OLL", "pll": "PLL",
+        }
+        for phase in PHASE_ORDER:
+            if phase in avg:
+                s = avg[phase]
+                label = phase_labels.get(phase, phase)
+                text_widget.insert(
+                    tk.END,
+                    f"{label}\t{s['steps']:.1f}({s['steps_std']:.1f})"
+                    f"\t{s['time']:.2f}({s['time_std']:.2f})"
+                    f"\t{s['observation_time']:.2f}({s['observation_time_std']:.2f})"
+                    f"\t{s['stutter_count']:.1f}"
+                    f"\t{s['wasted_moves']:.1f}"
+                    f"\t{s['tps']:.1f}({s['tps_std']:.1f})\n"
+                )
+
+        date_range = memory_db.get_date_range()
+        count = memory_db.get_record_count()
+        text_widget.insert(tk.END, sep + "\n")
+        text_widget.insert(tk.END, f"记录: {count}条 | 时间: {date_range} | 统计: 最近1000次")
+
+        text_widget.config(state="disabled")
+
+    def _build_analysis_tab(self):
+        tab = self._tab_analysis
+
+        input_header = ttk.Frame(tab)
+        input_header.pack(fill=tk.X, pady=(8, 2), padx=8)
         ttk.Label(input_header, text="  输入参数", font=("Microsoft YaHei", 10, "bold"),
                   foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
         self._create_help_icon(input_header, "input").pack(side=tk.LEFT, padx=(4, 0))
-        self.smart_paste_cb = tk.Checkbutton(input_header, text="📋 智能粘贴",
-                                              variable=self._smart_paste_var,
-                                              command=self._on_smart_paste_toggle,
-                                              bg=THEME["bg"], fg=THEME["fg"],
-                                              selectcolor=THEME["card_bg"],
-                                              activebackground=THEME["bg"],
-                                              activeforeground=THEME["accent"],
-                                              font=("Microsoft YaHei", 9))
-        self.smart_paste_cb.pack(side=tk.RIGHT, padx=(0, 2))
-        self._create_help_icon(input_header, "smart_paste").pack(side=tk.RIGHT, padx=(0, 4))
-        
-        mode_frame = tk.Frame(main_frame, bg=THEME["card_bg"], padx=12, pady=8,
+
+        mode_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=12, pady=8,
                               highlightthickness=1, highlightbackground=THEME["border"])
-        mode_frame.pack(fill=tk.X, pady=(0, 2))
-        
+        mode_frame.pack(fill=tk.X, padx=8, pady=(0, 2))
+
         tk.Label(mode_frame, text="分析模式:", bg=THEME["card_bg"],
                  fg=THEME["fg"], font=("Microsoft YaHei", 10)).pack(side=tk.LEFT)
-        
+
         self.analysis_mode_var = tk.StringVar(value='单组')
         self.analysis_mode_combo = ttk.Combobox(mode_frame, textvariable=self.analysis_mode_var,
                                                  width=10, state="readonly", font=("Microsoft YaHei", 10))
         self.analysis_mode_combo['values'] = ['单组', '多组']
         self.analysis_mode_combo.pack(side=tk.LEFT, padx=(8, 0))
         self.analysis_mode_combo.bind("<<ComboboxSelected>>", self._on_mode_change)
-        
+
         self.mode_desc_label = tk.Label(mode_frame, text="", bg=THEME["card_bg"],
                                         fg=THEME["fg"], font=("Microsoft YaHei", 9))
         self.mode_desc_label.pack(side=tk.LEFT, padx=(16, 0))
-        
-        self.input_container = tk.Frame(main_frame, bg=THEME["bg"])
-        self.input_container.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
-        
+
+        self.input_container = tk.Frame(tab, bg=THEME["bg"])
+        self.input_container.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
         self._create_single_input_ui()
-        
-        ai_header = ttk.Frame(main_frame)
-        ai_header.pack(fill=tk.X, pady=(0, 2))
-        ttk.Label(ai_header, text="  AI分析设置", font=("Microsoft YaHei", 10, "bold"),
-                  foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
-        self._create_help_icon(ai_header, "ai").pack(side=tk.LEFT, padx=(4, 0))
-        
-        ai_frame = tk.Frame(main_frame, bg=THEME["card_bg"], padx=12, pady=12,
-                            highlightthickness=1, highlightbackground=THEME["border"])
-        ai_frame.pack(fill=tk.X, pady=(0, 8))
-        
-        tk.Label(ai_frame, text="API Key:", bg=THEME["card_bg"],
-                 fg=THEME["fg"], font=("Microsoft YaHei", 10)).grid(row=0, column=0, sticky=tk.W, pady=4)
-        self.api_key_entry = ttk.Entry(ai_frame, width=35, show="●", font=("Consolas", 10))
-        self.api_key_entry.grid(row=0, column=1, sticky=tk.EW, pady=4, padx=(8, 0))
-        
-        tk.Label(ai_frame, text="模型:", bg=THEME["card_bg"],
-                 fg=THEME["fg"], font=("Microsoft YaHei", 10)).grid(row=0, column=2, sticky=tk.W, pady=4, padx=(12, 0))
-        self.model_var = tk.StringVar()
-        self.model_combo = ttk.Combobox(ai_frame, textvariable=self.model_var, width=30, state="readonly")
-        self.model_combo.grid(row=0, column=3, sticky=tk.EW, pady=4, padx=(8, 0))
-        
-        self.refresh_btn = ttk.Button(ai_frame, text="🔄 刷新", command=self._refresh_models, style="Secondary.TButton")
-        self.refresh_btn.grid(row=0, column=4, padx=(8, 0), pady=4)
-        
-        ai_frame.columnconfigure(1, weight=1)
-        ai_frame.columnconfigure(3, weight=2)
-        
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=(0, 8))
-        
+
+        button_frame = ttk.Frame(tab)
+        button_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+
         self.ai_analyze_btn = ttk.Button(button_frame, text="🚀 AI分析", command=self._ai_analyze, style="Accent.TButton")
         self.ai_analyze_btn.pack(side=tk.LEFT, padx=(0, 8))
-        
+
         self.stop_btn = ttk.Button(button_frame, text="⏹ 停止", command=self._stop_analyze, state="disabled", style="Danger.TButton")
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 8))
-        
+
         self.save_btn = ttk.Button(button_frame, text="💾 保存", command=self._save_result, style="Secondary.TButton")
         self.save_btn.pack(side=tk.LEFT, padx=(0, 8))
-        
+
         self.clear_btn = ttk.Button(button_frame, text="🗑 清空", command=self._clear, style="Secondary.TButton")
         self.clear_btn.pack(side=tk.LEFT, padx=(0, 8))
-        
-        self.daily_btn = ttk.Button(button_frame, text="📊 今日总结", command=self._show_daily_report, style="Secondary.TButton")
-        self.daily_btn.pack(side=tk.LEFT, padx=(0, 8))
-        
-        self.about_btn = ttk.Button(button_frame, text="ℹ️ 关于", command=lambda: self._show_guide_dialog(False), style="Secondary.TButton")
-        self.about_btn.pack(side=tk.LEFT, padx=(0, 16))
 
-        self._user_label = tk.Label(button_frame, text=f"👤 {self._current_username}",
-                                     font=("Microsoft YaHei", 10),
-                                     bg=THEME["bg"], fg=THEME["accent"],
-                                     cursor="hand2")
-        self._user_label.pack(side=tk.RIGHT, padx=(8, 0))
-        self._user_label.bind("<Button-1>", lambda e: self._switch_user())
-        self._create_tooltip(self._user_label, "点击切换用户")
-        
-        self._use_memory_cb = tk.Checkbutton(button_frame, text="🧠 使用记忆",
-                                              variable=self._use_memory_var,
-                                              bg=THEME["bg"], fg=THEME["fg"],
-                                              selectcolor=THEME["card_bg"],
-                                              activebackground=THEME["bg"],
-                                              activeforeground=THEME["accent"],
-                                              font=("Microsoft YaHei", 9))
-        self._use_memory_cb.pack(side=tk.LEFT, padx=(0, 2))
-        self._create_help_icon(button_frame, "memory").pack(side=tk.LEFT, padx=(0, 8))
-        
-        self._memory_count_label = ttk.Label(button_frame, text="", style="Status.TLabel")
-        self._memory_count_label.pack(side=tk.LEFT)
-        
         self.status_label = ttk.Label(button_frame, text="", style="Status.TLabel")
         self.status_label.pack(side=tk.LEFT)
-        
-        self._stats_header = ttk.Frame(main_frame)
-        self._stats_header.pack(fill=tk.X, pady=(0, 2))
-        self._stats_toggle_btn = ttk.Label(self._stats_header, text="  ▶ 水平统计",
-                                            font=("Microsoft YaHei", 10, "bold"),
-                                            foreground=THEME["accent"], background=THEME["bg"],
-                                            cursor="hand2")
-        self._stats_toggle_btn.pack(side=tk.LEFT)
-        self._stats_toggle_btn.bind("<Button-1>", lambda e: self._toggle_stats_panel())
-        
-        self._stats_manage_btn = ttk.Label(self._stats_header, text="  📂导入  📊导出  🗑清除",
-                                            font=("Microsoft YaHei", 9),
-                                            foreground="#888", background=THEME["bg"],
-                                            cursor="hand2")
-        self._stats_manage_btn.pack(side=tk.RIGHT, padx=(0, 8))
-        self._stats_manage_btn.bind("<Button-1>", lambda e: self._on_stats_manage_click(e))
-        
-        self._stats_panel = tk.Frame(main_frame, bg=THEME["card_bg"], padx=12, pady=8,
-                                      highlightthickness=1, highlightbackground=THEME["border"])
-        
-        self._stats_text = tk.Text(self._stats_panel, font=("Consolas", 9),
-                                    bg=THEME["card_bg"], fg=THEME["fg"],
-                                    height=14, wrap=tk.NONE, relief="flat",
-                                    cursor="arrow", state="disabled",
-                                    selectbackground=THEME["accent"],
-                                    selectforeground="white")
-        self._stats_text.tag_configure("bold", font=("Consolas", 9, "bold"))
-        self._stats_scroll_y = tk.Scrollbar(self._stats_panel, command=self._stats_text.yview, width=10)
-        self._stats_scroll_x = tk.Scrollbar(self._stats_panel, command=self._stats_text.xview,
-                                             orient=tk.HORIZONTAL, width=10)
-        self._stats_text.config(yscrollcommand=self._stats_scroll_y.set,
-                                 xscrollcommand=self._stats_scroll_x.set)
-        self._stats_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-        self._stats_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
-        self._stats_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        
-        self.timeline_header = ttk.Frame(main_frame)
-        self.timeline_header.pack(fill=tk.X, pady=(0, 2))
+
+        self.timeline_header = ttk.Frame(tab)
+        self.timeline_header.pack(fill=tk.X, padx=8, pady=(0, 2))
         ttk.Label(self.timeline_header, text="  还原步骤时间轴", font=("Microsoft YaHei", 10, "bold"),
                   foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
-        
-        self.timeline_frame = tk.Frame(main_frame, bg=THEME["card_bg"], padx=8, pady=8,
+
+        self.timeline_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=8, pady=8,
                                   highlightthickness=1, highlightbackground=THEME["border"])
-        self.timeline_frame.pack(fill=tk.X, pady=(0, 8))
-        
+        self.timeline_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+
         self.timeline_canvas = tk.Canvas(self.timeline_frame, height=100, bg=THEME["card_bg"],
                                           highlightthickness=0)
         self.timeline_canvas.pack(fill=tk.X)
-        
-        self.result_header = ttk.Frame(main_frame)
-        self.result_header.pack(fill=tk.X, pady=(0, 2))
+
+        self.result_header = ttk.Frame(tab)
+        self.result_header.pack(fill=tk.X, padx=8, pady=(0, 2))
         ttk.Label(self.result_header, text="  分析结果", font=("Microsoft YaHei", 10, "bold"),
                   foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
-        
+
         self.ai_status_label = tk.Label(self.result_header, text="", font=("Microsoft YaHei", 10, "bold"),
                                         bg=THEME["bg"], fg=THEME["accent"])
         self.ai_status_label.pack(side=tk.LEFT, padx=(8, 0))
-        
-        self.result_frame = tk.Frame(main_frame, bg=THEME["card_bg"], padx=8, pady=8,
+
+        self.result_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=8, pady=8,
                                 highlightthickness=1, highlightbackground=THEME["border"])
-        self.result_frame.pack(fill=tk.BOTH, expand=True)
-        
+        self.result_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
         self.result_text = scrolledtext.ScrolledText(self.result_frame, width=60, height=20, wrap=tk.WORD,
                                                       font=("Microsoft YaHei", 11),
                                                       bg=THEME["card_bg"], fg=THEME["fg"],
@@ -1238,6 +1582,135 @@ class CFOPAnalyzerGUI:
                                                       insertbackground=THEME["accent"])
         self.result_text.pack(fill=tk.BOTH, expand=True)
         configure_markdown_tags(self.result_text)
+
+    def _build_settings_tab(self):
+        tab = self._tab_settings
+
+        header = ttk.Frame(tab)
+        header.pack(fill=tk.X, pady=(8, 2), padx=8)
+        ttk.Label(header, text="  🔑 大模型设置", font=("Microsoft YaHei", 11, "bold"),
+                  foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
+
+        ai_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=16, pady=16,
+                            highlightthickness=1, highlightbackground=THEME["border"])
+        ai_frame.pack(fill=tk.X, padx=8, pady=(0, 12))
+
+        tk.Label(ai_frame, text="API Key:", bg=THEME["card_bg"],
+                 fg=THEME["fg"], font=("Microsoft YaHei", 10)).grid(row=0, column=0, sticky=tk.W, pady=8)
+        self.api_key_entry = ttk.Entry(ai_frame, width=45, show="●", font=("Consolas", 10))
+        self.api_key_entry.grid(row=0, column=1, sticky=tk.EW, pady=8, padx=(12, 0))
+
+        tk.Label(ai_frame, text="模型:", bg=THEME["card_bg"],
+                 fg=THEME["fg"], font=("Microsoft YaHei", 10)).grid(row=1, column=0, sticky=tk.W, pady=8)
+        self.model_var = tk.StringVar()
+        self.model_combo = ttk.Combobox(ai_frame, textvariable=self.model_var, width=40, state="readonly")
+        self.model_combo.grid(row=1, column=1, sticky=tk.EW, pady=8, padx=(12, 0))
+
+        self.refresh_btn = ttk.Button(ai_frame, text="🔄 刷新模型列表", command=self._refresh_models, style="Accent.TButton")
+        self.refresh_btn.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+
+        ai_frame.columnconfigure(1, weight=1)
+
+        feature_header = ttk.Frame(tab)
+        feature_header.pack(fill=tk.X, pady=(0, 2), padx=8)
+        ttk.Label(feature_header, text="  🛠 功能设置", font=("Microsoft YaHei", 11, "bold"),
+                  foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
+
+        feature_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=16, pady=16,
+                                  highlightthickness=1, highlightbackground=THEME["border"])
+        feature_frame.pack(fill=tk.X, padx=8, pady=(0, 12))
+
+        smart_paste_frame = tk.Frame(feature_frame, bg=THEME["card_bg"])
+        smart_paste_frame.pack(fill=tk.X, pady=(0, 12))
+        self._settings_smart_paste_cb = tk.Checkbutton(smart_paste_frame, text="📋 智能粘贴",
+                                                        variable=self._smart_paste_var,
+                                                        command=self._on_smart_paste_toggle,
+                                                        bg=THEME["card_bg"], fg=THEME["fg"],
+                                                        selectcolor=THEME["card_bg"],
+                                                        activebackground=THEME["card_bg"],
+                                                        activeforeground=THEME["accent"],
+                                                        font=("Microsoft YaHei", 10))
+        self._settings_smart_paste_cb.pack(side=tk.LEFT)
+        self._create_help_icon(smart_paste_frame, "smart_paste").pack(side=tk.LEFT, padx=(8, 0))
+        tk.Label(smart_paste_frame, text="自动从剪贴板识别csTimer数据",
+                 bg=THEME["card_bg"], fg="#888",
+                 font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=(16, 0))
+
+        memory_frame = tk.Frame(feature_frame, bg=THEME["card_bg"])
+        memory_frame.pack(fill=tk.X)
+        self._settings_memory_cb = tk.Checkbutton(memory_frame, text="🧠 记忆模式",
+                                                    variable=self._use_memory_var,
+                                                    bg=THEME["card_bg"], fg=THEME["fg"],
+                                                    selectcolor=THEME["card_bg"],
+                                                    activebackground=THEME["card_bg"],
+                                                    activeforeground=THEME["accent"],
+                                                    font=("Microsoft YaHei", 10))
+        self._settings_memory_cb.pack(side=tk.LEFT)
+        self._create_help_icon(memory_frame, "memory").pack(side=tk.LEFT, padx=(8, 0))
+        tk.Label(memory_frame, text="记录分析历史，提供对比参考和训练建议",
+                 bg=THEME["card_bg"], fg="#888",
+                 font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=(16, 0))
+
+    def _build_help_tab(self):
+        tab = self._tab_help
+
+        guide_text = """本软件通过AI分析您的魔方CFOP还原过程，提供技术评估和训练建议。
+
+【须知】
+1.本软件需要配合智能魔方使用，不限品牌，可以连接cstimer（https://www.cstimer.net/）进行还原即可。
+2.目前支持三阶魔方、任意底色、CFOP方法还原。
+3.本软件免费使用，但需要用户自备token，token获取方式见下文。
+
+【免责声明】
+本软件提供的魔方还原分析与训练建议基于算法模型生成，仅供参考，不构成任何专业指导或结果保证。
+用户应自行判断分析结果的适用性，并对使用本软件产生的任何后果承担责任。
+软件开发者不对因使用本软件导致的直接或间接损失负责。
+
+【快速开始】
+1. 在cstimer中打乱并还原您的魔方。
+2. 点击成绩列表中的还原时间，完整复制弹窗中的"打乱公式"和"回顾"中的内容到软件输入框。
+3. 配置硅基流动API Key 并选择合适的模型。
+4. 点击"AI分析"开始分析。
+5. 分析结果可以保存到本地。
+
+【API Key获取】
+- 从硅基流动平台获取API密钥
+- 注册并完成实名认证后可获得价值16元的token（使用GLM5.1可分析约180次，使用deepseek-v3.2可分析约2000次）
+- 注册链接：https://cloud.siliconflow.cn/i/k2AMkh34
+- 邀请码：k2AMkh34
+
+【模型选择】
+- 点击"刷新"按钮获取可用模型列表
+- 不同模型分析结果可能有较大差异，性能越高的模型分析结果越准确
+- 高性能模型推荐GLM系列，性价比模型推荐DeepSeek系列
+
+【功能特点】
+• 自动识别CFOP各阶段
+• 计算观察时间和执行时间
+• 定位卡顿点
+• 生成训练建议
+
+【交流反馈】
+• 交流QQ群：322267527"""
+
+        main_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=24, pady=20,
+                               highlightthickness=1, highlightbackground=THEME["border"])
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        title_label = tk.Label(main_frame, text="AI_CFOP 使用说明",
+                              font=("Microsoft YaHei", 16, "bold"),
+                              fg=THEME["accent"], bg=THEME["card_bg"])
+        title_label.pack(pady=(0, 16))
+
+        text_widget = scrolledtext.ScrolledText(main_frame, width=60, height=25,
+                                                font=("Microsoft YaHei", 10),
+                                                bg=THEME["card_bg"],
+                                                fg=THEME["fg"],
+                                                relief="flat", borderwidth=0,
+                                                wrap=tk.WORD)
+        text_widget.pack(fill=tk.BOTH, expand=True)
+        text_widget.insert("1.0", guide_text)
+        text_widget.config(state="disabled")
     
     def _create_single_input_ui(self):
         for widget in self.input_container.winfo_children():
@@ -1842,19 +2315,20 @@ class CFOPAnalyzerGUI:
         
         default_name = ""
         mode = self.analysis_mode_var.get()
+        username = self._current_username or "unknown"
         
         if mode == '单组' and self._last_analyzer:
             date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             try:
                 scramble = self.scramble_entry.get().strip().replace(" ", "")
                 total_time = self._last_analyzer.get_total_time()
-                default_name = f"{date_str}_{scramble}_{total_time:.1f}s"
+                default_name = f"{username}_{date_str}_{scramble}_{total_time:.1f}s"
             except Exception:
                 pass
         elif mode == '多组' and hasattr(self, 'multi_inputs') and self.multi_inputs:
             date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             count = len(self.multi_inputs)
-            default_name = f"{date_str}_多组{count}组"
+            default_name = f"{username}_{date_str}_多组{count}组"
         
         initial_dir = RESULT_DIR
         filepath = filedialog.asksaveasfilename(
@@ -2334,8 +2808,8 @@ class CFOPAnalyzerGUI:
                     total_time = analyzer.get_total_time()
                     memory_db.save_record(g['scramble'], g['solution'], total_time, g['bottom_name'], stats)
             self._update_memory_count()
-            if self._stats_expanded:
-                self._refresh_stats_panel()
+            if hasattr(self, '_refresh_home_stats'):
+                self._refresh_home_stats()
         except Exception as e:
             log.error(f"保存记忆数据失败: {e}")
 

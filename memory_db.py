@@ -86,8 +86,15 @@ def save_record(scramble: str, solution: str, total_time: float,
                 bottom_color: str, phase_stats: Dict) -> int:
     conn = _get_conn()
     c = conn.cursor()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     uid = _current_user_id if _current_user_id else 0
+    c.execute(
+        "SELECT id FROM records WHERE user_id = ? AND scramble = ? AND solution = ? AND ABS(total_time - ?) < 0.01 LIMIT 1",
+        (uid, scramble, solution, total_time)
+    )
+    if c.fetchone():
+        conn.close()
+        return 0
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute(
         "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color) VALUES (?, ?, ?, ?, ?, ?)",
         (uid, now, scramble, solution, total_time, bottom_color)
@@ -261,6 +268,52 @@ def get_pb() -> Optional[dict]:
     if row and row[0] is not None:
         return {"time": round(row[0], 2), "date": row[1][:10] if row[1] else ""}
     return None
+
+
+def get_total_tps_avg(days: Optional[int] = None, limit: int = 1000) -> Optional[float]:
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    if days is not None:
+        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("SELECT id FROM records WHERE user_id = ? AND date >= ? ORDER BY date DESC LIMIT ?",
+                  (uid, since, limit))
+    else:
+        c.execute("SELECT id FROM records WHERE user_id = ? ORDER BY date DESC LIMIT ?", (uid, limit))
+    record_ids = [row[0] for row in c.fetchall()]
+    if not record_ids:
+        conn.close()
+        return None
+    placeholders = ",".join("?" * len(record_ids))
+    c.execute(f"SELECT tps FROM phase_stats WHERE record_id IN ({placeholders})", record_ids)
+    tps_values = [row[0] for row in c.fetchall() if row[0] is not None]
+    conn.close()
+    if not tps_values:
+        return None
+    return round(_trimmed_mean(tps_values), 2)
+
+
+def get_total_tps_std(days: Optional[int] = None, limit: int = 1000) -> Optional[float]:
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    if days is not None:
+        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("SELECT id FROM records WHERE user_id = ? AND date >= ? ORDER BY date DESC LIMIT ?",
+                  (uid, since, limit))
+    else:
+        c.execute("SELECT id FROM records WHERE user_id = ? ORDER BY date DESC LIMIT ?", (uid, limit))
+    record_ids = [row[0] for row in c.fetchall()]
+    if not record_ids:
+        conn.close()
+        return None
+    placeholders = ",".join("?" * len(record_ids))
+    c.execute(f"SELECT tps FROM phase_stats WHERE record_id IN ({placeholders})", record_ids)
+    tps_values = [row[0] for row in c.fetchall() if row[0] is not None]
+    conn.close()
+    if not tps_values or len(tps_values) < 2:
+        return None
+    return round(_std_dev(tps_values), 2)
 
 
 def clear_all():
