@@ -23,6 +23,7 @@ from move_utils import get_orientation_desc
 from api_utils import load_config, save_config, fetch_models, _xor_encode, _xor_decode
 from markdown_renderer import configure_markdown_tags, render_markdown
 import memory_db
+import user_manager
 
 
 log = None
@@ -60,12 +61,399 @@ class CFOPAnalyzerGUI:
         self._use_memory_var = tk.BooleanVar(value=True)
         self._stats_expanded = False
 
+        self._current_user_id = None
+        self._current_username = ""
         self._setup_styles()
         self._create_widgets()
         self._load_saved_config()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.timeline_canvas.bind("<Configure>", self._on_canvas_resize)
-        self.root.after(1, self._async_init_tasks)
+        self.root.after(1, self._show_user_select_and_init)
+
+    def _show_user_select_and_init(self):
+        try:
+            memory_db.init_db()
+            user_manager.init_users_table()
+            config = load_config()
+            last_user_id = config.get("last_user_id")
+            users = user_manager.get_all_users()
+            if not users:
+                uid = user_manager.ensure_default_user()
+                users = user_manager.get_all_users()
+            if last_user_id:
+                user = user_manager.get_user(last_user_id)
+                if user:
+                    self._select_user_and_continue(user)
+                    return
+            self._show_user_select_dialog()
+        except Exception as e:
+            if log:
+                log.error(f"用户选择初始化失败: {e}", exc_info=True)
+            import traceback
+            traceback.print_exc()
+            users = user_manager.get_all_users()
+            if users:
+                self._select_user_and_continue(users[0])
+            else:
+                uid = user_manager.ensure_default_user()
+                user = user_manager.get_user(uid)
+                if user:
+                    self._select_user_and_continue(user)
+
+    def _select_user_and_continue(self, user: dict):
+        self._current_user_id = user["id"]
+        self._current_username = user["username"]
+        memory_db.set_current_user(user["id"])
+        config = load_config()
+        config["last_user_id"] = user["id"]
+        save_config(config)
+        self._update_user_display()
+        self._async_init_tasks()
+
+    def _show_user_select_dialog(self):
+        dialog = tk.Toplevel(self.root)
+        dialog.title("选择用户")
+        dialog.configure(bg=THEME["bg"])
+        dialog.resizable(False, False)
+        dialog.attributes('-topmost', True)
+        dialog.grab_set()
+        dialog.protocol("WM_DELETE_WINDOW", lambda: self._on_user_dialog_close(dialog))
+
+        dialog_width = 480
+        dialog_height = 420
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() - dialog_width) // 2
+        y = (dialog.winfo_screenheight() - dialog_height) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=24, pady=20)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        title_label = tk.Label(main_frame, text="选择用户",
+                               font=("Microsoft YaHei", 16, "bold"),
+                               fg=THEME["accent"], bg=THEME["card_bg"])
+        title_label.pack(pady=(0, 16))
+
+        list_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        list_frame.pack(fill=tk.BOTH, expand=True)
+
+        canvas = tk.Canvas(list_frame, bg=THEME["card_bg"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        scroll_frame = tk.Frame(canvas, bg=THEME["card_bg"])
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def refresh_user_list():
+            for w in scroll_frame.winfo_children():
+                w.destroy()
+            users = user_manager.get_all_users()
+            for u in users:
+                row = tk.Frame(scroll_frame, bg=THEME["card_bg"], pady=6)
+                row.pack(fill=tk.X, padx=8)
+
+                avatar_path = u.get("avatar", "")
+                if avatar_path and os.path.isfile(avatar_path):
+                    try:
+                        from PIL import Image as PILImage, ImageTk
+                        img = PILImage.open(avatar_path).resize((40, 40), PILImage.LANCZOS)
+                        photo = ImageTk.PhotoImage(img)
+                        avatar_lbl = tk.Label(row, image=photo, bg=THEME["card_bg"])
+                        avatar_lbl.image = photo
+                        avatar_lbl.pack(side=tk.LEFT, padx=(0, 10))
+                    except Exception:
+                        _add_default_avatar(row)
+                else:
+                    _add_default_avatar(row)
+
+                name_lbl = tk.Label(row, text=u["username"],
+                                    font=("Microsoft YaHei", 12),
+                                    fg=THEME["fg"], bg=THEME["card_bg"])
+                name_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+                select_btn = ttk.Button(row, text="选择",
+                                        command=lambda uid=u["id"]: self._on_user_selected(uid, dialog),
+                                        style="Accent.TButton")
+                select_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+        def _add_default_avatar(parent):
+            default_path = user_manager.get_default_avatar_path()
+            if os.path.isfile(default_path):
+                try:
+                    from PIL import Image as PILImage, ImageTk
+                    img = PILImage.open(default_path).resize((40, 40), PILImage.LANCZOS)
+                    photo = ImageTk.PhotoImage(img)
+                    lbl = tk.Label(parent, image=photo, bg=THEME["card_bg"])
+                    lbl.image = photo
+                    lbl.pack(side=tk.LEFT, padx=(0, 10))
+                    return
+                except Exception:
+                    pass
+            avatar_canvas = tk.Canvas(parent, width=40, height=40,
+                                      highlightthickness=0, bg=THEME["accent"])
+            avatar_canvas.create_text(20, 20, text="👤",
+                                      font=("Microsoft YaHei", 16), fill="white")
+            avatar_canvas.pack(side=tk.LEFT, padx=(0, 10))
+
+        refresh_user_list()
+
+        btn_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        btn_frame.pack(fill=tk.X, pady=(16, 0))
+
+        create_btn = ttk.Button(btn_frame, text="➕ 创建用户",
+                                command=lambda: self._show_create_user_dialog(dialog, refresh_user_list),
+                                style="Accent.TButton")
+        create_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        manage_btn = ttk.Button(btn_frame, text="⚙️ 管理用户",
+                                command=lambda: self._show_user_manage_dialog(dialog, refresh_user_list),
+                                style="Secondary.TButton")
+        manage_btn.pack(side=tk.LEFT)
+
+    def _on_user_selected(self, user_id: int, dialog):
+        user = user_manager.get_user(user_id)
+        if user:
+            dialog.destroy()
+            self._select_user_and_continue(user)
+
+    def _on_user_dialog_close(self, dialog):
+        if self._current_user_id is None:
+            users = user_manager.get_all_users()
+            if users:
+                self._select_user_and_continue(users[0])
+                dialog.destroy()
+            else:
+                uid = user_manager.ensure_default_user()
+                user = user_manager.get_user(uid)
+                self._select_user_and_continue(user)
+                dialog.destroy()
+        else:
+            dialog.destroy()
+
+    def _show_create_user_dialog(self, parent, on_created=None):
+        dialog = tk.Toplevel(parent)
+        dialog.title("创建用户")
+        dialog.configure(bg=THEME["bg"])
+        dialog.resizable(False, False)
+        dialog.transient(parent)
+        dialog.grab_set()
+
+        dialog_width = 380
+        dialog_height = 200
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        dialog.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() - dialog_width) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - dialog_height) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=20, pady=16)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        tk.Label(main_frame, text="用户名:", bg=THEME["card_bg"],
+                 fg=THEME["fg"], font=("Microsoft YaHei", 10)).grid(row=0, column=0, sticky=tk.W, pady=8)
+        name_entry = tk.Entry(main_frame, width=20, font=("Microsoft YaHei", 10),
+                              bg=THEME["input_bg"], fg=THEME["fg"],
+                              relief="flat", highlightthickness=1,
+                              highlightbackground=THEME["border"],
+                              highlightcolor=THEME["accent"])
+        name_entry.grid(row=0, column=1, sticky=tk.EW, pady=8, padx=(8, 0))
+
+        random_btn = ttk.Button(main_frame, text="🎲 随机",
+                                command=lambda: name_entry.delete(0, tk.END) or name_entry.insert(0, user_manager.generate_random_username()),
+                                style="Secondary.TButton")
+        random_btn.grid(row=0, column=2, padx=(8, 0), pady=8)
+
+        error_label = tk.Label(main_frame, text="", bg=THEME["card_bg"],
+                               fg=THEME["danger"], font=("Microsoft YaHei", 9))
+        error_label.grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=(0, 4))
+
+        btn_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        btn_frame.grid(row=2, column=0, columnspan=3, pady=(8, 0))
+
+        def on_create():
+            username = name_entry.get().strip()
+            if not username:
+                error_label.config(text="用户名不能为空")
+                return
+            if user_manager.check_username_exists(username):
+                error_label.config(text="用户名已存在")
+                return
+            uid = user_manager.create_user(username)
+            if uid:
+                dialog.destroy()
+                if on_created:
+                    on_created()
+            else:
+                error_label.config(text="创建失败")
+
+        ttk.Button(btn_frame, text="创建", command=on_create,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy,
+                   style="Secondary.TButton").pack(side=tk.LEFT)
+
+        main_frame.columnconfigure(1, weight=1)
+
+    def _show_user_manage_dialog(self, parent, on_changed=None):
+        dialog = tk.Toplevel(parent)
+        dialog.title("用户管理")
+        dialog.configure(bg=THEME["bg"])
+        dialog.resizable(False, False)
+        dialog.transient(parent)
+        dialog.grab_set()
+
+        dialog_width = 480
+        dialog_height = 400
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        dialog.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() - dialog_width) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - dialog_height) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=16, pady=12)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        tk.Label(main_frame, text="用户管理",
+                 font=("Microsoft YaHei", 14, "bold"),
+                 fg=THEME["accent"], bg=THEME["card_bg"]).pack(pady=(0, 12))
+
+        list_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        list_frame.pack(fill=tk.BOTH, expand=True)
+
+        canvas = tk.Canvas(list_frame, bg=THEME["card_bg"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        scroll_frame = tk.Frame(canvas, bg=THEME["card_bg"])
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def refresh_list():
+            for w in scroll_frame.winfo_children():
+                w.destroy()
+            users = user_manager.get_all_users()
+            for u in users:
+                row = tk.Frame(scroll_frame, bg=THEME["card_bg"], pady=4)
+                row.pack(fill=tk.X, padx=4, pady=2)
+
+                current_mark = " ✓" if u["id"] == self._current_user_id else ""
+                name_lbl = tk.Label(row, text=u["username"] + current_mark,
+                                    font=("Microsoft YaHei", 11),
+                                    fg=THEME["fg"], bg=THEME["card_bg"])
+                name_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+                if u["id"] != self._current_user_id:
+                    del_btn = tk.Button(row, text="删除", width=4,
+                                        font=("Microsoft YaHei", 8),
+                                        fg="#fff", bg=THEME["danger"],
+                                        activebackground="#d63031",
+                                        relief="flat", cursor="hand2",
+                                        command=lambda uid=u["id"]: self._delete_user_confirm(uid, refresh_list))
+                    del_btn.pack(side=tk.RIGHT, padx=(4, 0))
+
+        refresh_list()
+
+        btn_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        btn_frame.pack(fill=tk.X, pady=(12, 0))
+
+        ttk.Button(btn_frame, text="➕ 创建用户",
+                   command=lambda: self._show_create_user_dialog(dialog, refresh_list),
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="关闭",
+                   command=lambda: (on_changed() if on_changed else None, dialog.destroy()),
+                   style="Secondary.TButton").pack(side=tk.RIGHT)
+
+    def _delete_user_confirm(self, user_id: int, on_done=None):
+        user = user_manager.get_user(user_id)
+        if not user:
+            return
+        if not messagebox.askyesno("确认删除", f"确定删除用户「{user['username']}」？\n该用户的所有数据将被删除，此操作不可撤销！"):
+            return
+        user_manager.delete_user(user_id)
+        if on_done:
+            on_done()
+
+    def _update_user_display(self):
+        if hasattr(self, '_user_label'):
+            self._user_label.config(text=f"👤 {self._current_username}")
+
+    def _switch_user(self):
+        self._show_user_select_dialog()
+
+    def _check_anomaly_and_confirm(self, solve_time: float, mode: str) -> bool:
+        if not self._use_memory_var.get():
+            return True
+        avg = memory_db.get_total_time_avg()
+        if avg is None or avg <= 0:
+            return True
+        if mode == '单组':
+            threshold = 0.70
+        else:
+            threshold = 0.40
+        diff_ratio = abs(solve_time - avg) / avg
+        if diff_ratio > threshold:
+            return self._show_anomaly_dialog(solve_time, avg, mode, threshold)
+        return True
+
+    def _show_anomaly_dialog(self, solve_time: float, avg: float, mode: str, threshold: float) -> bool:
+        result = [None]
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("成绩异常提示")
+        dialog.configure(bg=THEME["bg"])
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        dialog_width = 420
+        dialog_height = 240
+        dialog.geometry(f"{dialog_width}x{dialog_height}")
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog_width) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog_height) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=20, pady=16)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+        tk.Label(main_frame, text="⚠️ 成绩异常提示",
+                 font=("Microsoft YaHei", 14, "bold"),
+                 fg=THEME["danger"], bg=THEME["card_bg"]).pack(pady=(0, 12))
+
+        mode_label = "单组还原" if mode == '单组' else "多组平均"
+        info_text = (
+            f"当前用户：{self._current_username}\n"
+            f"当前用户平均水平：{avg:.2f}s\n"
+            f"本次{mode_label}时间：{solve_time:.2f}s\n"
+            f"偏差超过±{threshold * 100:.0f}%，请确认当前用户是否正确"
+        )
+        tk.Label(main_frame, text=info_text,
+                 font=("Microsoft YaHei", 10),
+                 fg=THEME["fg"], bg=THEME["card_bg"],
+                 justify=tk.LEFT).pack(pady=(0, 16))
+
+        btn_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        btn_frame.pack()
+
+        def on_keep():
+            result[0] = True
+            dialog.destroy()
+
+        def on_switch():
+            result[0] = False
+            dialog.destroy()
+            self.root.after(100, self._switch_user)
+
+        ttk.Button(btn_frame, text="仍使用当前用户", command=on_keep,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=8)
+        ttk.Button(btn_frame, text="切换用户", command=on_switch,
+                   style="Secondary.TButton").pack(side=tk.LEFT, padx=8)
+
+        dialog.wait_window()
+        return result[0] if result[0] is not None else True
 
     def _async_init_tasks(self):
         self.root.update_idletasks()
@@ -756,6 +1144,14 @@ class CFOPAnalyzerGUI:
         
         self.about_btn = ttk.Button(button_frame, text="ℹ️ 关于", command=lambda: self._show_guide_dialog(False), style="Secondary.TButton")
         self.about_btn.pack(side=tk.LEFT, padx=(0, 16))
+
+        self._user_label = tk.Label(button_frame, text=f"👤 {self._current_username}",
+                                     font=("Microsoft YaHei", 10),
+                                     bg=THEME["bg"], fg=THEME["accent"],
+                                     cursor="hand2")
+        self._user_label.pack(side=tk.RIGHT, padx=(8, 0))
+        self._user_label.bind("<Button-1>", lambda e: self._switch_user())
+        self._create_tooltip(self._user_label, "点击切换用户")
         
         self._use_memory_cb = tk.Checkbutton(button_frame, text="🧠 使用记忆",
                                               variable=self._use_memory_var,
@@ -1563,16 +1959,21 @@ class CFOPAnalyzerGUI:
             return
         
         log.info(f"开始AI分析, 模型: {model}, 打乱: {scramble}, 底色: {bottom_color}")
-        
+
         self._start_ai_status_animation("building")
-        
+
         try:
             analyzer = CFOPAnalyzer.from_bottom_color(scramble, solution, bottom_color)
-            
+
             validation_errors = self._validate_analyzer(analyzer)
             if validation_errors:
                 self._reset_analysis_ui()
                 messagebox.showerror("步骤拆解异常", validation_errors)
+                return
+
+            total_time = analyzer.get_total_time()
+            if not self._check_anomaly_and_confirm(total_time, '单组'):
+                self._reset_analysis_ui()
                 return
             
             memory_text = self._build_memory_text() if self._use_memory_var.get() else ""
@@ -2419,7 +2820,14 @@ class CFOPAnalyzerGUI:
                 self._reset_analysis_ui()
                 messagebox.showerror("错误", f"第 {g['index']} 组构建分析数据失败:\n{str(e)}")
                 return
-        
+
+        multi_times = [a.get_total_time() for a in analyzers]
+        if multi_times:
+            avg_time = sum(multi_times) / len(multi_times)
+            if not self._check_anomaly_and_confirm(avg_time, '多组'):
+                self._reset_analysis_ui()
+                return
+
         memory_text = self._build_memory_text() if self._use_memory_var.get() else ""
         comparison_text = self._build_multi_comparison_text(analyzers) if self._use_memory_var.get() else ""
         system_prompt, user_prompt = self._build_multi_analysis_prompts(analyzers, memory_text + comparison_text)
