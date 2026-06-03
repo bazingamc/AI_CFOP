@@ -705,6 +705,8 @@ class CFOPAnalyzerGUI:
         memory_db.init_db()
         self._update_memory_count()
         self._refresh_home_stats()
+        if hasattr(self, '_refresh_data_tab'):
+            self._refresh_data_tab()
         if self._smart_paste_var.get():
             self._start_clipboard_monitor()
         self._set_all_controls_state("normal")
@@ -1163,6 +1165,8 @@ class CFOPAnalyzerGUI:
         self._update_memory_count()
         if hasattr(self, '_refresh_home_stats'):
             self._refresh_home_stats()
+        if hasattr(self, '_refresh_data_tab'):
+            self._refresh_data_tab()
         
         if "error" in result:
             messagebox.showerror("导入失败", f"导入过程中出错:\n{result['error']}")
@@ -1209,6 +1213,8 @@ class CFOPAnalyzerGUI:
         self._update_memory_count()
         if hasattr(self, '_refresh_home_stats'):
             self._refresh_home_stats()
+        if hasattr(self, '_refresh_data_tab'):
+            self._refresh_data_tab()
         self._set_status("记忆数据已清除")
         self.root.after(2000, self._clear_status)
 
@@ -1344,16 +1350,19 @@ class CFOPAnalyzerGUI:
 
         self._tab_home = ttk.Frame(self._notebook)
         self._tab_analysis = ttk.Frame(self._notebook)
+        self._tab_data = ttk.Frame(self._notebook)
         self._tab_settings = ttk.Frame(self._notebook)
         self._tab_help = ttk.Frame(self._notebook)
 
         self._notebook.add(self._tab_home, text="  🏠 首页  ")
         self._notebook.add(self._tab_analysis, text="  🔬 深度分析  ")
+        self._notebook.add(self._tab_data, text="  📂 数据管理  ")
         self._notebook.add(self._tab_settings, text="  ⚙️ 设置  ")
         self._notebook.add(self._tab_help, text="  ❓ 帮助  ")
 
         self._build_home_tab()
         self._build_analysis_tab()
+        self._build_data_tab()
         self._build_settings_tab()
         self._build_help_tab()
 
@@ -1389,29 +1398,6 @@ class CFOPAnalyzerGUI:
         self._home_stats_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
         self._home_stats_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
         self._home_stats_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        data_header = ttk.Frame(tab)
-        data_header.pack(fill=tk.X, pady=(0, 2), padx=8)
-        ttk.Label(data_header, text="  📂 数据管理", font=("Microsoft YaHei", 11, "bold"),
-                  foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
-        self._memory_count_label = ttk.Label(data_header, text="", style="Status.TLabel")
-        self._memory_count_label.pack(side=tk.RIGHT, padx=(8, 0))
-
-        data_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=12, pady=12,
-                               highlightthickness=1, highlightbackground=THEME["border"])
-        data_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
-
-        btn_row1 = tk.Frame(data_frame, bg=THEME["card_bg"])
-        btn_row1.pack(fill=tk.X, pady=(0, 8))
-
-        ttk.Button(btn_row1, text="📂 导入csTimer数据", command=self._import_cstimer,
-                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_row1, text="📊 导出CSV", command=self._export_memory,
-                   style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_row1, text="🗑 清除数据", command=self._clear_memory,
-                   style="Danger.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_row1, text="🔄 刷新统计", command=self._refresh_home_stats,
-                   style="Secondary.TButton").pack(side=tk.LEFT)
 
         train_header = ttk.Frame(tab)
         train_header.pack(fill=tk.X, pady=(0, 2), padx=8)
@@ -1582,6 +1568,379 @@ class CFOPAnalyzerGUI:
                                                       insertbackground=THEME["accent"])
         self.result_text.pack(fill=tk.BOTH, expand=True)
         configure_markdown_tags(self.result_text)
+
+    def _build_data_tab(self):
+        tab = self._tab_data
+
+        filter_header = ttk.Frame(tab)
+        filter_header.pack(fill=tk.X, pady=(8, 2), padx=8)
+        ttk.Label(filter_header, text="  📂 数据管理", font=("Microsoft YaHei", 11, "bold"),
+                  foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
+
+        filter_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=12, pady=8,
+                                 highlightthickness=1, highlightbackground=THEME["border"])
+        filter_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
+
+        tk.Label(filter_frame, text="日期:", bg=THEME["card_bg"],
+                 fg=THEME["fg"], font=("Microsoft YaHei", 10)).pack(side=tk.LEFT)
+
+        self._data_date_var = tk.StringVar()
+        self._data_date_combo = ttk.Combobox(filter_frame, textvariable=self._data_date_var,
+                                              width=14, state="readonly", font=("Microsoft YaHei", 10))
+        self._data_date_combo.pack(side=tk.LEFT, padx=(6, 8))
+        self._data_date_combo.bind("<<ComboboxSelected>>", self._on_data_date_change)
+
+        ttk.Button(filter_frame, text="📅 今天", command=self._set_data_date_today,
+                   style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(filter_frame, text="🔄 刷新", command=self._refresh_data_tab,
+                   style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+
+        self._data_count_label = ttk.Label(filter_frame, text="", style="Status.TLabel")
+        self._data_count_label.pack(side=tk.LEFT, padx=(8, 0))
+
+        btn_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=12, pady=8,
+                              highlightthickness=1, highlightbackground=THEME["border"])
+        btn_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
+
+        ttk.Button(btn_frame, text="📂 导入csTimer数据", command=self._import_cstimer,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="📊 导出CSV", command=self._export_memory,
+                   style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="🗑 清除数据", command=self._clear_memory,
+                   style="Danger.TButton").pack(side=tk.LEFT, padx=(0, 8))
+
+        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
+
+        self._data_analyze_btn = ttk.Button(btn_frame, text="🔬 分析选中项（支持多选）", command=self._data_to_analysis,
+                                             style="Accent.TButton")
+        self._data_analyze_btn.pack(side=tk.LEFT, padx=(0, 8))
+
+        tree_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=4, pady=4,
+                               highlightthickness=1, highlightbackground=THEME["border"])
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        columns = ("time", "total_time", "scramble")
+        self._data_tree = ttk.Treeview(tree_frame, columns=columns, show="headings",
+                                        selectmode="extended", height=20)
+
+        self._data_tree.heading("time", text="还原时间 ▲", command=lambda: self._sort_data_by_column("time"))
+        self._data_tree.heading("total_time", text="总用时(s) ▲", command=lambda: self._sort_data_by_column("total_time"))
+        self._data_tree.heading("scramble", text="打乱公式")
+
+        self._data_tree.column("time", width=160, anchor="center")
+        self._data_tree.column("total_time", width=90, anchor="center")
+        self._data_tree.column("scramble", width=500, anchor="w")
+
+        tree_scroll_y = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self._data_tree.yview)
+        tree_scroll_x = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self._data_tree.xview)
+        self._data_tree.configure(yscrollcommand=tree_scroll_y.set,
+                                   xscrollcommand=tree_scroll_x.set)
+
+        self._data_tree.grid(row=0, column=0, sticky="nsew")
+        tree_scroll_y.grid(row=0, column=1, sticky="ns")
+        tree_scroll_x.grid(row=1, column=0, sticky="ew")
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+
+        self._data_tree.bind("<Double-1>", self._on_data_row_double_click)
+        self._data_tree.bind("<Button-3>", self._on_data_right_click)
+
+        self._data_context_menu = tk.Menu(self.root, tearoff=0)
+        self._data_context_menu.add_command(label="🗑 删除选中记录", command=self._delete_selected_records)
+
+        self._data_records = []
+        self._data_sort_column = "time"
+        self._data_sort_ascending = True
+
+        self._refresh_data_tab()
+
+    def _refresh_data_tab(self):
+        dates = memory_db.get_available_dates()
+        today = datetime.now().strftime("%Y-%m-%d")
+        self._data_date_combo['values'] = dates
+        if dates:
+            if today in dates:
+                self._data_date_var.set(today)
+            else:
+                self._data_date_var.set(dates[0])
+        else:
+            self._data_date_var.set("")
+        self._load_data_records()
+
+    def _set_data_date_today(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        dates = list(self._data_date_combo['values'])
+        if today not in dates:
+            dates.insert(0, today)
+            self._data_date_combo['values'] = dates
+        self._data_date_var.set(today)
+        self._load_data_records()
+
+    def _on_data_date_change(self, event=None):
+        self._load_data_records()
+
+    def _load_data_records(self):
+        date_str = self._data_date_var.get()
+        records = memory_db.get_records_by_date(date_str if date_str else None)
+
+        if self._data_sort_column == "total_time":
+            records.sort(key=lambda r: r["total_time"], reverse=not self._data_sort_ascending)
+        else:
+            records.sort(key=lambda r: r["date"], reverse=not self._data_sort_ascending)
+
+        self._data_records = records
+
+        for item in self._data_tree.get_children():
+            self._data_tree.delete(item)
+
+        for rec in records:
+            time_str = rec["date"][11:] if len(rec["date"]) > 10 else rec["date"]
+            self._data_tree.insert("", tk.END, iid=str(rec["id"]),
+                                    values=(time_str, f"{rec['total_time']:.2f}", rec["scramble"]))
+
+        count = len(records)
+        self._data_count_label.config(text=f"共 {count} 条记录")
+
+        self._update_memory_count()
+
+    def _sort_data_by_column(self, col: str):
+        if self._data_sort_column == col:
+            self._data_sort_ascending = not self._data_sort_ascending
+        else:
+            self._data_sort_column = col
+            self._data_sort_ascending = True
+
+        arrow = "▲" if self._data_sort_ascending else "▼"
+        if col == "time":
+            self._data_tree.heading("time", text=f"还原时间 {arrow}", command=lambda: self._sort_data_by_column("time"))
+            self._data_tree.heading("total_time", text="总用时(s)", command=lambda: self._sort_data_by_column("total_time"))
+        else:
+            self._data_tree.heading("time", text="还原时间", command=lambda: self._sort_data_by_column("time"))
+            self._data_tree.heading("total_time", text=f"总用时(s) {arrow}", command=lambda: self._sort_data_by_column("total_time"))
+
+        self._load_data_records()
+
+    def _on_data_row_double_click(self, event=None):
+        selection = self._data_tree.selection()
+        if not selection:
+            return
+        record_id = int(selection[0])
+        self._show_record_detail(record_id)
+
+    def _on_data_right_click(self, event):
+        item = self._data_tree.identify_row(event.y)
+        if item:
+            if item not in self._data_tree.selection():
+                self._data_tree.selection_set(item)
+            try:
+                self._data_context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self._data_context_menu.grab_release()
+
+    def _delete_selected_records(self):
+        selection = self._data_tree.selection()
+        if not selection:
+            return
+
+        count = len(selection)
+        if not messagebox.askyesno("确认删除",
+                                    f"确定删除选中的 {count} 条记录？\n\n⚠ 此操作不可恢复！"):
+            return
+
+        record_ids = [int(item_id) for item_id in selection]
+        deleted = memory_db.delete_records(record_ids)
+
+        self._refresh_data_tab()
+        self._refresh_home_stats()
+
+        if deleted > 0:
+            self._set_status(f"已删除 {deleted} 条记录")
+            self.root.after(2000, self._clear_status)
+
+    def _show_record_detail(self, record_id: int):
+        detail = memory_db.get_record_detail(record_id)
+        if not detail:
+            messagebox.showwarning("提示", "未找到记录详情")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("还原详情")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(True, True)
+
+        dialog_width = 700
+        dialog_height = 550
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog_width) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog_height) // 2
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+
+        main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=16, pady=12)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        info_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        info_frame.pack(fill=tk.X, pady=(0, 8))
+
+        tk.Label(info_frame, text=f"📅 {detail['date']}", font=("Microsoft YaHei", 10),
+                 bg=THEME["card_bg"], fg=THEME["fg"]).pack(side=tk.LEFT, padx=(0, 16))
+        tk.Label(info_frame, text=f"⏱ 总用时: {detail['total_time']:.2f}s", font=("Microsoft YaHei", 10, "bold"),
+                 bg=THEME["card_bg"], fg=THEME["accent"]).pack(side=tk.LEFT, padx=(0, 16))
+        tk.Label(info_frame, text=f"🎨 底色: {detail['bottom_color']}", font=("Microsoft YaHei", 10),
+                 bg=THEME["card_bg"], fg=THEME["fg"]).pack(side=tk.LEFT)
+
+        scramble_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        scramble_frame.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(scramble_frame, text="打乱公式:", font=("Microsoft YaHei", 9, "bold"),
+                 bg=THEME["card_bg"], fg=THEME["fg"]).pack(anchor="w")
+        tk.Label(scramble_frame, text=detail["scramble"], font=("Consolas", 9),
+                 bg=THEME["card_bg"], fg=THEME["fg"], wraplength=650, justify="left").pack(anchor="w", padx=(12, 0))
+
+        solution_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        solution_frame.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(solution_frame, text="还原步骤:", font=("Microsoft YaHei", 9, "bold"),
+                 bg=THEME["card_bg"], fg=THEME["fg"]).pack(anchor="w")
+        sol_text = tk.Text(solution_frame, font=("Consolas", 9), height=3, wrap=tk.WORD,
+                           bg=THEME["input_bg"], fg=THEME["fg"], relief="flat", borderwidth=0)
+        sol_text.insert("1.0", detail["solution"])
+        sol_text.config(state="disabled")
+        sol_text.pack(fill=tk.X, padx=(12, 0))
+
+        phase_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        phase_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        tk.Label(phase_frame, text="各阶段详情:", font=("Microsoft YaHei", 9, "bold"),
+                 bg=THEME["card_bg"], fg=THEME["fg"]).pack(anchor="w")
+
+        phase_tree_frame = tk.Frame(phase_frame, bg=THEME["card_bg"])
+        phase_tree_frame.pack(fill=tk.BOTH, expand=True, padx=(12, 0))
+
+        phase_columns = ("phase", "steps", "time", "obs_time", "stutter", "wasted", "tps")
+        phase_tree = ttk.Treeview(phase_tree_frame, columns=phase_columns, show="headings", height=7)
+
+        phase_tree.heading("phase", text="阶段")
+        phase_tree.heading("steps", text="步数")
+        phase_tree.heading("time", text="用时(s)")
+        phase_tree.heading("obs_time", text="观察(s)")
+        phase_tree.heading("stutter", text="卡顿")
+        phase_tree.heading("wasted", text="废步")
+        phase_tree.heading("tps", text="TPS")
+
+        phase_tree.column("phase", width=70, anchor="center")
+        phase_tree.column("steps", width=60, anchor="center")
+        phase_tree.column("time", width=80, anchor="center")
+        phase_tree.column("obs_time", width=80, anchor="center")
+        phase_tree.column("stutter", width=60, anchor="center")
+        phase_tree.column("wasted", width=60, anchor="center")
+        phase_tree.column("tps", width=60, anchor="center")
+
+        phase_labels = {"cross": "Cross", "f2l1": "F2L-1", "f2l2": "F2L-2",
+                        "f2l3": "F2L-3", "f2l4": "F2L-4", "oll": "OLL", "pll": "PLL"}
+        phase_order = ["cross", "f2l1", "f2l2", "f2l3", "f2l4", "oll", "pll"]
+
+        has_phases = any(detail["phase_stats"].get(pk) for pk in phase_order)
+        if not has_phases:
+            tk.Label(phase_tree_frame, text="⚠ 无阶段数据，该记录可能未完成还原或数据异常",
+                     font=("Microsoft YaHei", 9), bg=THEME["card_bg"], fg="#e17055").pack(anchor="w", pady=8)
+
+        for phase_key in phase_order:
+            ps = detail["phase_stats"].get(phase_key, {})
+            if ps:
+                phase_tree.insert("", tk.END, values=(
+                    phase_labels.get(phase_key, phase_key),
+                    ps.get("steps", 0),
+                    f"{ps.get('time', 0):.2f}",
+                    f"{ps.get('observation_time', 0):.2f}",
+                    ps.get("stutter_count", 0),
+                    ps.get("wasted_moves", 0),
+                    f"{ps.get('tps', 0):.1f}"
+                ))
+
+        present_phases = [pk for pk in phase_order if detail["phase_stats"].get(pk)]
+        if has_phases and len(present_phases) < len(phase_order):
+            missing = [phase_labels[pk] for pk in phase_order if not detail["phase_stats"].get(pk)]
+            tk.Label(phase_tree_frame, text=f"⚠ 缺少阶段: {', '.join(missing)}",
+                     font=("Microsoft YaHei", 9), bg=THEME["card_bg"], fg="#e17055").pack(anchor="w", pady=(4, 0))
+
+        phase_tree.pack(fill=tk.BOTH, expand=True)
+
+        btn_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+        btn_frame.pack(fill=tk.X, pady=(8, 0))
+        ttk.Button(btn_frame, text="关闭", command=dialog.destroy,
+                   style="Secondary.TButton").pack(side=tk.RIGHT)
+
+    def _data_to_analysis(self):
+        selection = self._data_tree.selection()
+        if not selection:
+            messagebox.showwarning("提示", "请先选择要分析的还原数据")
+            return
+
+        selected_records = []
+        for item_id in selection:
+            record_id = int(item_id)
+            detail = memory_db.get_record_detail(record_id)
+            if detail:
+                selected_records.append(detail)
+
+        if not selected_records:
+            messagebox.showwarning("提示", "未找到选中记录的详情")
+            return
+
+        if len(selected_records) == 1:
+            self._fill_single_analysis(selected_records[0])
+        else:
+            self._fill_multi_analysis(selected_records)
+
+        self._notebook.select(self._tab_analysis)
+
+    def _fill_single_analysis(self, record: dict):
+        if self.analysis_mode_var.get() != '单组':
+            self.analysis_mode_var.set('单组')
+            self._on_mode_change()
+
+        self.scramble_entry.delete(0, tk.END)
+        self.scramble_entry.insert(0, record["scramble"])
+
+        self.solution_text.delete(0, tk.END)
+        self.solution_text.insert(0, record["solution"])
+
+        bottom_color = record.get("bottom_color", "白")
+        bottom_name = self._get_bottom_name_from_color(bottom_color)
+        if bottom_name:
+            self.orientation_var.set(bottom_name)
+
+    def _fill_multi_analysis(self, records: list):
+        if self.analysis_mode_var.get() != '多组':
+            self.analysis_mode_var.set('多组')
+            self._on_mode_change()
+        else:
+            if hasattr(self, 'multi_inputs') and self.multi_inputs:
+                for inp in self.multi_inputs:
+                    for key in ('num_label', 'scramble', 'orientation_combo', 'solution', 'del_btn'):
+                        if key in inp:
+                            inp[key].destroy()
+                self.multi_inputs.clear()
+
+        for rec in records:
+            if len(self.multi_inputs) >= 20:
+                break
+            self._add_multi_row()
+            inp = self.multi_inputs[-1]
+            inp['scramble'].delete(0, tk.END)
+            inp['scramble'].insert(0, rec["scramble"])
+            inp['solution'].delete(0, tk.END)
+            inp['solution'].insert(0, rec["solution"])
+
+            bottom_color = rec.get("bottom_color", "白")
+            bottom_name = self._get_bottom_name_from_color(bottom_color)
+            if bottom_name:
+                inp['orientation_var'].set(bottom_name)
+
+        self._update_multi_row_numbers()
+        self._update_multi_count()
+        self._reindex_multi_grid()
+
+    def _get_bottom_name_from_color(self, color: str) -> str:
+        bottom_data = next((opt for opt in BOTTOM_COLOR_OPTIONS if opt[1] == color), None)
+        return bottom_data[0] if bottom_data else BOTTOM_COLOR_NAMES[0]
 
     def _build_settings_tab(self):
         tab = self._tab_settings
@@ -2810,6 +3169,8 @@ class CFOPAnalyzerGUI:
             self._update_memory_count()
             if hasattr(self, '_refresh_home_stats'):
                 self._refresh_home_stats()
+            if hasattr(self, '_refresh_data_tab'):
+                self._refresh_data_tab()
         except Exception as e:
             log.error(f"保存记忆数据失败: {e}")
 

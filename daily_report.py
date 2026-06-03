@@ -179,17 +179,13 @@ def build_stats_text(stats: Dict) -> str:
         best = ao12["best"]
         worst = ao12["worst"]
         lines.append(f"")
-        lines.append(f"🏆 最佳Ao12: {best['ao12']:.2f}s (第{best['index']}~{best['index']+11}次)")
-        for i, t in enumerate(best["times"]):
-            scramble = best.get("scrambles", [""] * 12)[i] if "scrambles" in best else ""
-            scramble_short = scramble[:30] + "..." if len(scramble) > 30 else scramble
-            lines.append(f"    第{best['index']+i}次: {t:.2f}s  {scramble_short}")
+        lines.append(f"🏆 最佳Ao12: {best['ao12']:.2f}s")
+        times_str = "  ".join(f"{t:.2f}" for t in best["times"])
+        lines.append(f"    {times_str}")
         lines.append(f"")
-        lines.append(f"📉 最差Ao12: {worst['ao12']:.2f}s (第{worst['index']}~{worst['index']+11}次)")
-        for i, t in enumerate(worst["times"]):
-            scramble = worst.get("scrambles", [""] * 12)[i] if "scrambles" in worst else ""
-            scramble_short = scramble[:30] + "..." if len(scramble) > 30 else scramble
-            lines.append(f"    第{worst['index']+i}次: {t:.2f}s  {scramble_short}")
+        lines.append(f"📉 最差Ao12: {worst['ao12']:.2f}s")
+        times_str = "  ".join(f"{t:.2f}" for t in worst["times"])
+        lines.append(f"    {times_str}")
 
     return "\n".join(lines)
 
@@ -609,28 +605,8 @@ def save_pdf(stats: Dict, ai_summary: str, chart_line: str, chart_hist: str,
 
         for label, group in [("🏆 最佳Ao12详情", ao12["best"]), ("📉 最差Ao12详情", ao12["worst"])]:
             story.append(Paragraph(label, heading_style))
-            detail_header = ["序号", "时间", "打乱公式"]
-            detail_rows = [detail_header]
-            for i, t in enumerate(group["times"]):
-                scrambles = group.get("scrambles", [""] * 12)
-                scr = scrambles[i] if i < len(scrambles) else ""
-                detail_rows.append([
-                    f"第{group['index']+i}次",
-                    f"{t:.2f}s",
-                    scr,
-                ])
-            dt = Table(detail_rows, colWidths=[20 * mm, 20 * mm, 110 * mm])
-            dt.setStyle(TableStyle([
-                ("FONTNAME", (0, 0), (-1, -1), cn_font),
-                ("FONTSIZE", (0, 0), (-1, -1), 8),
-                ("BACKGROUND", (0, 0), (-1, 0), HexColor("#6c5ce7")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), HexColor("#ffffff")),
-                ("GRID", (0, 0), (-1, -1), 0.5, HexColor("#dfe6e9")),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("TOPPADDING", (0, 0), (-1, -1), 2),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-            ]))
-            story.append(dt)
+            times_str = "  ".join(f"{t:.2f}" for t in group["times"])
+            story.append(Paragraph(times_str, body_style))
             story.append(Spacer(1, 6))
 
     if os.path.isfile(chart_line):

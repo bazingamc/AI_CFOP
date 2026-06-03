@@ -210,6 +210,78 @@ def get_averages(days: Optional[int] = None, limit: int = 1000) -> Dict[str, Dic
     return result
 
 
+def get_records_by_date(date_str: str = None) -> List[Dict]:
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    if date_str:
+        c.execute(
+            "SELECT id, date, scramble, solution, total_time, bottom_color "
+            "FROM records WHERE user_id = ? AND date LIKE ? ORDER BY date ASC",
+            (uid, f"{date_str}%")
+        )
+    else:
+        c.execute(
+            "SELECT id, date, scramble, solution, total_time, bottom_color "
+            "FROM records WHERE user_id = ? ORDER BY date ASC",
+            (uid,)
+        )
+    records = []
+    for row in c.fetchall():
+        records.append({
+            "id": row[0], "date": row[1], "scramble": row[2],
+            "solution": row[3], "total_time": row[4], "bottom_color": row[5]
+        })
+    conn.close()
+    return records
+
+
+def get_record_detail(record_id: int) -> Optional[Dict]:
+    conn = _get_conn()
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, date, scramble, solution, total_time, bottom_color "
+        "FROM records WHERE id = ?",
+        (record_id,)
+    )
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        return None
+    record = {
+        "id": row[0], "date": row[1], "scramble": row[2],
+        "solution": row[3], "total_time": row[4], "bottom_color": row[5]
+    }
+    c.execute(
+        "SELECT phase, steps, time, observation_time, stutter_count, wasted_moves, tps "
+        "FROM phase_stats WHERE record_id = ?",
+        (record_id,)
+    )
+    phase_stats = {}
+    for prow in c.fetchall():
+        phase_stats[prow[0]] = {
+            "steps": prow[1], "time": prow[2], "observation_time": prow[3],
+            "stutter_count": prow[4], "wasted_moves": prow[5], "tps": prow[6]
+        }
+    record["phase_stats"] = phase_stats
+    conn.close()
+    return record
+
+
+def get_available_dates() -> List[str]:
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    c.execute(
+        "SELECT DISTINCT SUBSTR(date, 1, 10) as d FROM records "
+        "WHERE user_id = ? ORDER BY d DESC",
+        (uid,)
+    )
+    dates = [row[0] for row in c.fetchall()]
+    conn.close()
+    return dates
+
+
 def get_all_averages_by_period() -> Dict[str, Dict[str, Dict[str, float]]]:
     result = {}
     periods = [
@@ -314,6 +386,20 @@ def get_total_tps_std(days: Optional[int] = None, limit: int = 1000) -> Optional
     if not tps_values or len(tps_values) < 2:
         return None
     return round(_std_dev(tps_values), 2)
+
+
+def delete_records(record_ids: List[int]) -> int:
+    if not record_ids:
+        return 0
+    conn = _get_conn()
+    c = conn.cursor()
+    placeholders = ",".join("?" * len(record_ids))
+    c.execute(f"DELETE FROM phase_stats WHERE record_id IN ({placeholders})", record_ids)
+    c.execute(f"DELETE FROM records WHERE id IN ({placeholders})", record_ids)
+    deleted = c.rowcount
+    conn.commit()
+    conn.close()
+    return deleted
 
 
 def clear_all():
