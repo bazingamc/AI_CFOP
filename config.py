@@ -402,7 +402,7 @@ PHASE_LABELS = {
 }
 
 PHASE_DETAIL_TEMPLATE = """### {phase_name}
-- 步骤(含时间戳): {timed_moves}
+{rotation_info}- 步骤(含时间戳): {timed_moves}
 - 步骤(合并后): {merged_moves}
 - 步数: {steps}
 - 用时: {time:.2f}s (起始: {start:.2f}s, 结束: {end:.2f}s)

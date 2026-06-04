@@ -1994,22 +1994,12 @@ class CFOPAnalyzerGUI:
         tk.Label(scramble_frame, text=detail["scramble"], font=("Consolas", 9),
                  bg=THEME["card_bg"], fg=THEME["fg"], wraplength=650, justify="left").pack(anchor="w", padx=(12, 0))
 
-        # 解法复盘：重新分析获取各阶段还原步骤（仅显示步骤，不含用时详情）
+        # 解法复盘：重新分析获取各阶段还原步骤（含转体识别）
         replay_text = ""
         try:
             from analyzer import CFOPAnalyzer
             _, replay_analyzer, _ = CFOPAnalyzer.auto_detect_bottom_color(detail["scramble"], detail["solution"])
-            result = replay_analyzer.analyze()
-            phase_labels = {"cross": "Cross", "f2l1": "F2L-1", "f2l2": "F2L-2",
-                            "f2l3": "F2L-3", "f2l4": "F2L-4", "oll": "OLL", "pll": "PLL"}
-            from config import PHASE_ORDER
-            lines = []
-            for phase in PHASE_ORDER:
-                moves = result.get(phase, [])
-                if moves:
-                    merged = "".join(replay_analyzer._merge_moves(moves))
-                    lines.append(f"【{phase_labels.get(phase, phase)}】:{merged}")
-            replay_text = "\n".join(lines) if lines else detail["solution"]
+            replay_text = replay_analyzer.format_output(include_timing=False, include_orientation=True)
         except Exception:
             replay_text = detail["solution"]
 
@@ -4144,7 +4134,7 @@ class CFOPAnalyzerGUI:
         groups_detail = ""
         for i, analyzer in enumerate(analyzers):
             groups_detail += f"\n### 第 {i+1} 组 (总时间: {times[i]:.2f}s)\n"
-            groups_detail += analyzer.format_output()
+            groups_detail += analyzer.format_output(include_orientation=True)
             groups_detail += "\n"
         
         system = SYSTEM_PROMPT.format(

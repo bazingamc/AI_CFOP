@@ -414,7 +414,7 @@ def call_ao12_analysis(api_key: str, model: str, analyzers: list, which: str) ->
     groups_detail = ""
     for i, analyzer in enumerate(analyzers):
         groups_detail += f"\n### 第 {i+1} 组 (总时间: {times[i]:.2f}s)\n"
-        groups_detail += analyzer.format_output()
+        groups_detail += analyzer.format_output(include_orientation=True)
         groups_detail += "\n"
 
     label = "最佳" if which == "best" else "最差"
@@ -450,7 +450,7 @@ def call_ao12_analysis_stream(api_key: str, model: str, analyzers: list, which: 
     groups_detail = ""
     for i, analyzer in enumerate(analyzers):
         groups_detail += f"\n### 第 {i+1} 组 (总时间: {times[i]:.2f}s)\n"
-        groups_detail += analyzer.format_output()
+        groups_detail += analyzer.format_output(include_orientation=True)
         groups_detail += "\n"
 
     label = "最佳" if which == "best" else "最差"
