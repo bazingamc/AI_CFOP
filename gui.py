@@ -14,7 +14,7 @@ from datetime import datetime
 from config import (
     THEME, HELP_TEXTS, PHASE_COLORS, PHASE_LABELS,
     ORIENTATION_OPTIONS, PHASE_ORDER,
-    BOTTOM_COLOR_NAMES, BOTTOM_COLOR_OPTIONS, OPPOSITE_COLORS,
+    BOTTOM_COLOR_NAMES, BOTTOM_COLOR_OPTIONS, OPPOSITE_COLORS, COLOR_NAMES,
     RESULT_DIR, SILICONFLOW_BASE_URL
 )
 
@@ -727,16 +727,12 @@ class CFOPAnalyzerGUI:
                 self.model_combo.config(state="readonly" if state == "normal" else state)
             if hasattr(self, 'analysis_mode_combo'):
                 self.analysis_mode_combo.config(state="readonly" if state == "normal" else state)
-            if hasattr(self, 'orientation_combo'):
-                self.orientation_combo.config(state="readonly" if state == "normal" else state)
             if hasattr(self, 'multi_inputs') and self.multi_inputs:
                 for inp in self.multi_inputs:
                     if 'scramble' in inp:
                         inp['scramble'].config(state=state)
                     if 'solution' in inp:
                         inp['solution'].config(state=state)
-                    if 'orientation_combo' in inp:
-                        inp['orientation_combo'].config(state="readonly" if state == "normal" else state)
                     if 'delete_btn' in inp:
                         inp['delete_btn'].config(state=state)
         except tk.TclError:
@@ -1122,23 +1118,23 @@ class CFOPAnalyzerGUI:
         )
         if not path:
             return
-        
+
         progress_win = tk.Toplevel(self.root)
         progress_win.title("导入csTimer数据")
         progress_win.geometry("350x120")
         progress_win.resizable(False, False)
         progress_win.transient(self.root)
         progress_win.grab_set()
-        
+
         progress_win.update_idletasks()
         x = self.root.winfo_x() + (self.root.winfo_width() - 350) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - 120) // 2
         progress_win.geometry(f"+{x}+{y}")
-        
+
         tk.Label(progress_win, text="正在导入，请稍候...", font=("Microsoft YaHei", 10)).pack(pady=(15, 5))
         progress_label = tk.Label(progress_win, text="准备中...", font=("Microsoft YaHei", 9), fg="#666")
         progress_label.pack(pady=5)
-        
+
         def on_progress(current, total):
             progress_label.config(text=f"处理中: {current}/{total}")
             progress_win.update()
@@ -1151,7 +1147,48 @@ class CFOPAnalyzerGUI:
                 self.root.after(0, lambda: self._on_import_done(progress_win, {
                     "total": 0, "imported": 0, "skipped_no_review": 0, "skipped_parse_error": 0, "error": str(e)
                 }))
-        
+
+        import threading
+        t = threading.Thread(target=do_import, daemon=True)
+        t.start()
+
+    def _import_csv(self):
+        path = filedialog.askopenfilename(
+            title="选择CSV文件",
+            filetypes=[("CSV文件", "*.csv"), ("所有文件", "*.*")]
+        )
+        if not path:
+            return
+
+        progress_win = tk.Toplevel(self.root)
+        progress_win.title("导入CSV数据")
+        progress_win.geometry("350x120")
+        progress_win.resizable(False, False)
+        progress_win.transient(self.root)
+        progress_win.grab_set()
+
+        progress_win.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - 350) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - 120) // 2
+        progress_win.geometry(f"+{x}+{y}")
+
+        tk.Label(progress_win, text="正在导入，请稍候...", font=("Microsoft YaHei", 10)).pack(pady=(15, 5))
+        progress_label = tk.Label(progress_win, text="准备中...", font=("Microsoft YaHei", 9), fg="#666")
+        progress_label.pack(pady=5)
+
+        def on_progress(current, total):
+            progress_label.config(text=f"处理中: {current}/{total}")
+            progress_win.update()
+
+        def do_import():
+            try:
+                result = memory_db.import_csv(path, progress_cb=on_progress)
+                self.root.after(0, lambda: self._on_import_done(progress_win, result))
+            except Exception as e:
+                self.root.after(0, lambda: self._on_import_done(progress_win, {
+                    "total": 0, "imported": 0, "skipped_no_review": 0, "skipped_parse_error": 0, "error": str(e)
+                }))
+
         import threading
         t = threading.Thread(target=do_import, daemon=True)
         t.start()
@@ -1383,7 +1420,7 @@ class CFOPAnalyzerGUI:
 
         self._home_stats_text = tk.Text(self._home_stats_panel, font=("Consolas", 9),
                                          bg=THEME["card_bg"], fg=THEME["fg"],
-                                         height=18, wrap=tk.NONE, relief="flat",
+                                         height=25, wrap=tk.NONE, relief="flat",
                                          cursor="arrow", state="disabled",
                                          selectbackground=THEME["accent"],
                                          selectforeground="white")
@@ -1481,6 +1518,22 @@ class CFOPAnalyzerGUI:
         count = memory_db.get_record_count()
         text_widget.insert(tk.END, sep + "\n")
         text_widget.insert(tk.END, f"记录: {count}条 | 时间: {date_range} | 统计: 最近1000次")
+
+        # 优缺点标签TOP3
+        tag_stats = memory_db.get_tag_stats()
+        top_s = tag_stats.get("top_strengths", [])
+        top_w = tag_stats.get("top_weaknesses", [])
+        if top_s or top_w:
+            text_widget.insert(tk.END, "\n")
+            text_widget.insert(tk.END, sep + "\n")
+            if top_s:
+                text_widget.insert(tk.END, "优点TOP3: ", "highlight_label")
+                s_parts = [f"{tag}({cnt})" for tag, cnt in top_s]
+                text_widget.insert(tk.END, "  ".join(s_parts) + "\n")
+            if top_w:
+                text_widget.insert(tk.END, "缺点TOP3: ", "highlight_label")
+                w_parts = [f"{tag}({cnt})" for tag, cnt in top_w]
+                text_widget.insert(tk.END, "  ".join(w_parts) + "\n")
 
         text_widget.config(state="disabled")
 
@@ -1581,16 +1634,24 @@ class CFOPAnalyzerGUI:
                                  highlightthickness=1, highlightbackground=THEME["border"])
         filter_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
 
-        tk.Label(filter_frame, text="日期:", bg=THEME["card_bg"],
+        tk.Label(filter_frame, text="开始日期:", bg=THEME["card_bg"],
                  fg=THEME["fg"], font=("Microsoft YaHei", 10)).pack(side=tk.LEFT)
+        self._data_start_date_var = tk.StringVar()
+        self._data_start_date_combo = ttk.Combobox(filter_frame, textvariable=self._data_start_date_var,
+                                                    width=12, state="readonly", font=("Microsoft YaHei", 10))
+        self._data_start_date_combo.pack(side=tk.LEFT, padx=(4, 8))
 
-        self._data_date_var = tk.StringVar()
-        self._data_date_combo = ttk.Combobox(filter_frame, textvariable=self._data_date_var,
-                                              width=14, state="readonly", font=("Microsoft YaHei", 10))
-        self._data_date_combo.pack(side=tk.LEFT, padx=(6, 8))
-        self._data_date_combo.bind("<<ComboboxSelected>>", self._on_data_date_change)
+        tk.Label(filter_frame, text="结束日期:", bg=THEME["card_bg"],
+                 fg=THEME["fg"], font=("Microsoft YaHei", 10)).pack(side=tk.LEFT)
+        self._data_end_date_var = tk.StringVar()
+        self._data_end_date_combo = ttk.Combobox(filter_frame, textvariable=self._data_end_date_var,
+                                                  width=12, state="readonly", font=("Microsoft YaHei", 10))
+        self._data_end_date_combo.pack(side=tk.LEFT, padx=(4, 8))
 
-        ttk.Button(filter_frame, text="📅 今天", command=self._set_data_date_today,
+        self._data_start_date_combo.bind("<<ComboboxSelected>>", self._on_data_date_change)
+        self._data_end_date_combo.bind("<<ComboboxSelected>>", self._on_data_date_change)
+
+        ttk.Button(filter_frame, text="📅 本月", command=self._set_data_date_this_month,
                    style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(filter_frame, text="🔄 刷新", command=self._refresh_data_tab,
                    style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
@@ -1603,6 +1664,8 @@ class CFOPAnalyzerGUI:
         btn_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
 
         ttk.Button(btn_frame, text="📂 导入csTimer数据", command=self._import_cstimer,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="📥 导入CSV", command=self._import_csv,
                    style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="📊 导出CSV", command=self._export_memory,
                    style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
@@ -1619,17 +1682,21 @@ class CFOPAnalyzerGUI:
                                highlightthickness=1, highlightbackground=THEME["border"])
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
-        columns = ("time", "total_time", "scramble")
+        columns = ("time", "total_time", "strength", "weakness", "scramble")
         self._data_tree = ttk.Treeview(tree_frame, columns=columns, show="headings",
                                         selectmode="extended", height=20)
 
         self._data_tree.heading("time", text="还原时间 ▲", command=lambda: self._sort_data_by_column("time"))
         self._data_tree.heading("total_time", text="总用时(s) ▲", command=lambda: self._sort_data_by_column("total_time"))
+        self._data_tree.heading("strength", text="优点")
+        self._data_tree.heading("weakness", text="缺点")
         self._data_tree.heading("scramble", text="打乱公式")
 
-        self._data_tree.column("time", width=160, anchor="center")
-        self._data_tree.column("total_time", width=90, anchor="center")
-        self._data_tree.column("scramble", width=500, anchor="w")
+        self._data_tree.column("time", width=180, anchor="center", minwidth=140)
+        self._data_tree.column("total_time", width=90, anchor="center", minwidth=60)
+        self._data_tree.column("strength", width=200, anchor="w", minwidth=80)
+        self._data_tree.column("weakness", width=200, anchor="w", minwidth=80)
+        self._data_tree.column("scramble", width=350, anchor="w", minwidth=100)
 
         tree_scroll_y = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self._data_tree.yview)
         tree_scroll_x = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self._data_tree.xview)
@@ -1645,6 +1712,8 @@ class CFOPAnalyzerGUI:
         self._data_tree.bind("<Double-1>", self._on_data_row_double_click)
         self._data_tree.bind("<Button-3>", self._on_data_right_click)
 
+        self._data_tree.tag_configure("analyzed", foreground="#2563eb")
+
         self._data_context_menu = tk.Menu(self.root, tearoff=0)
         self._data_context_menu.add_command(label="🗑 删除选中记录", command=self._delete_selected_records)
 
@@ -1657,31 +1726,66 @@ class CFOPAnalyzerGUI:
     def _refresh_data_tab(self):
         dates = memory_db.get_available_dates()
         today = datetime.now().strftime("%Y-%m-%d")
-        self._data_date_combo['values'] = dates
+        self._data_start_date_combo['values'] = dates
+        self._data_end_date_combo['values'] = dates
+        # 默认显示今天到今天
         if dates:
             if today in dates:
-                self._data_date_var.set(today)
+                self._data_start_date_var.set(today)
+                self._data_end_date_var.set(today)
             else:
-                self._data_date_var.set(dates[0])
+                # dates是降序，dates[0]是最新的日期
+                self._data_start_date_var.set(dates[0])
+                self._data_end_date_var.set(dates[0])
         else:
-            self._data_date_var.set("")
+            self._data_start_date_var.set("")
+            self._data_end_date_var.set("")
         self._load_data_records()
 
-    def _set_data_date_today(self):
+    def _set_data_date_this_month(self):
         today = datetime.now().strftime("%Y-%m-%d")
-        dates = list(self._data_date_combo['values'])
+        start_of_month = today[:8] + "01"
+        # 重新从数据库获取日期列表，保持原有排序
+        dates = memory_db.get_available_dates()
+        # 确保日期在列表中
+        if start_of_month not in dates:
+            dates.insert(0, start_of_month)
         if today not in dates:
             dates.insert(0, today)
-            self._data_date_combo['values'] = dates
-        self._data_date_var.set(today)
+        # 保持降序排列
+        dates = sorted(set(dates), reverse=True)
+        self._data_start_date_combo['values'] = dates
+        self._data_end_date_combo['values'] = dates
+        self._data_start_date_var.set(start_of_month)
+        self._data_end_date_var.set(today)
         self._load_data_records()
 
     def _on_data_date_change(self, event=None):
+        start = self._data_start_date_var.get()
+        end = self._data_end_date_var.get()
+        if start and end:
+            try:
+                from datetime import datetime as dt
+                s = dt.strptime(start, "%Y-%m-%d")
+                e = dt.strptime(end, "%Y-%m-%d")
+                if s > e:
+                    messagebox.showwarning("提示", "开始日期不能晚于结束日期")
+                    return
+                delta = (e - s).days
+                if delta > 93:
+                    messagebox.showwarning("提示", "日期范围不能超过3个月（93天）")
+                    return
+            except ValueError:
+                pass
         self._load_data_records()
 
     def _load_data_records(self):
-        date_str = self._data_date_var.get()
-        records = memory_db.get_records_by_date(date_str if date_str else None)
+        start_date = self._data_start_date_var.get()
+        end_date = self._data_end_date_var.get()
+        if start_date and end_date:
+            records = memory_db.get_records_by_date(start_date=start_date, end_date=end_date)
+        else:
+            records = memory_db.get_records_by_date()
 
         if self._data_sort_column == "total_time":
             records.sort(key=lambda r: r["total_time"], reverse=not self._data_sort_ascending)
@@ -1694,14 +1798,82 @@ class CFOPAnalyzerGUI:
             self._data_tree.delete(item)
 
         for rec in records:
-            time_str = rec["date"][11:] if len(rec["date"]) > 10 else rec["date"]
+            time_str = rec["date"] if rec["date"] else ""
+            s_tags = rec.get("strength_tags", "") or ""
+            w_tags = rec.get("weakness_tags", "") or ""
+            is_analyzed = rec.get("analyzed", 0)
+            tag_name = "analyzed" if is_analyzed else ""
             self._data_tree.insert("", tk.END, iid=str(rec["id"]),
-                                    values=(time_str, f"{rec['total_time']:.2f}", rec["scramble"]))
+                                    values=(time_str, f"{rec['total_time']:.2f}",
+                                            s_tags, w_tags, rec["scramble"]),
+                                    tags=(tag_name,))
 
         count = len(records)
         self._data_count_label.config(text=f"共 {count} 条记录")
 
         self._update_memory_count()
+
+        # 自适应列宽
+        self._auto_size_data_columns()
+
+    def _auto_size_data_columns(self):
+        """根据内容自动调整数据表格列宽"""
+        if not hasattr(self, '_data_tree'):
+            return
+        # 用于测量文字宽度的字体
+        col_font = ("Microsoft YaHei", 9)
+        header_font = ("Microsoft YaHei", 9, "bold")
+        pad = 20  # 左右内边距
+
+        col_keys = ["time", "total_time", "strength", "weakness", "scramble"]
+        headings = {"time": "还原时间", "total_time": "总用时(s)",
+                    "strength": "优点", "weakness": "缺点", "scramble": "打乱公式"}
+
+        max_widths = {}
+        for key in col_keys:
+            # 标题宽度
+            hw = self._measure_text_width(header_font, headings.get(key, key)) + pad + 20
+            max_widths[key] = hw
+
+        # 遍历所有行内容取最大宽度
+        for item_id in self._data_tree.get_children():
+            values = self._data_tree.item(item_id, "values")
+            for i, key in enumerate(col_keys):
+                if i < len(values):
+                    val = str(values[i])
+                    w = self._measure_text_width(col_font, val) + pad
+                    if w > max_widths[key]:
+                        max_widths[key] = w
+
+        # 设置列宽，scramble列限制最大宽度
+        for key in col_keys:
+            max_w = max_widths[key]
+            if key == "scramble":
+                max_w = min(max_w, 600)
+            self._data_tree.column(key, width=max_w)
+
+    def _measure_text_width(self, font, text: str) -> int:
+        """测量文本在指定字体下的像素宽度"""
+        try:
+            from tkinter import font as tkfont
+            f = tkfont.Font(family=font[0], size=font[1],
+                            weight="bold" if len(font) > 2 and font[2] == "bold" else "normal")
+            return f.measure(text)
+        except Exception:
+            # 回退：按字符数估算
+            return len(text) * 10
+
+    def _wrap_tags(self, tags_str: str, per_line: int = 2) -> str:
+        """将逗号分隔的标签字符串按每per_line个换行显示"""
+        if not tags_str:
+            return ""
+        parts = [t.strip() for t in tags_str.split(",") if t.strip()]
+        if not parts:
+            return ""
+        lines = []
+        for i in range(0, len(parts), per_line):
+            lines.append(",".join(parts[i:i + per_line]))
+        return "\n".join(lines)
 
     def _sort_data_by_column(self, col: str):
         if self._data_sort_column == col:
@@ -1788,6 +1960,31 @@ class CFOPAnalyzerGUI:
         tk.Label(info_frame, text=f"🎨 底色: {detail['bottom_color']}", font=("Microsoft YaHei", 10),
                  bg=THEME["card_bg"], fg=THEME["fg"]).pack(side=tk.LEFT)
 
+        # 优缺点标签显示
+        s_tags = detail.get("strength_tags", "") or ""
+        w_tags = detail.get("weakness_tags", "") or ""
+        if s_tags or w_tags:
+            tags_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
+            tags_frame.pack(fill=tk.X, pady=(0, 4))
+            if s_tags:
+                s_parts = [t.strip() for t in s_tags.split(",") if t.strip()]
+                tk.Label(tags_frame, text="优点:", font=("Microsoft YaHei", 9, "bold"),
+                         bg=THEME["card_bg"], fg="#27ae60").pack(side=tk.LEFT, padx=(0, 4))
+                for t in s_parts:
+                    tk.Label(tags_frame, text=t, font=("Microsoft YaHei", 9),
+                             bg="#e8f8f0", fg="#27ae60", padx=4, pady=1,
+                             relief="groove", borderwidth=1).pack(side=tk.LEFT, padx=(0, 4))
+            if w_tags:
+                w_parts = [t.strip() for t in w_tags.split(",") if t.strip()]
+                if s_tags:
+                    tk.Label(tags_frame, text="  ", bg=THEME["card_bg"]).pack(side=tk.LEFT)
+                tk.Label(tags_frame, text="缺点:", font=("Microsoft YaHei", 9, "bold"),
+                         bg=THEME["card_bg"], fg="#e74c3c").pack(side=tk.LEFT, padx=(0, 4))
+                for t in w_parts:
+                    tk.Label(tags_frame, text=t, font=("Microsoft YaHei", 9),
+                             bg="#fdecea", fg="#e74c3c", padx=4, pady=1,
+                             relief="groove", borderwidth=1).pack(side=tk.LEFT, padx=(0, 4))
+
         scramble_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
         scramble_frame.pack(fill=tk.X, pady=(0, 4))
         tk.Label(scramble_frame, text="打乱公式:", font=("Microsoft YaHei", 9, "bold"),
@@ -1795,13 +1992,32 @@ class CFOPAnalyzerGUI:
         tk.Label(scramble_frame, text=detail["scramble"], font=("Consolas", 9),
                  bg=THEME["card_bg"], fg=THEME["fg"], wraplength=650, justify="left").pack(anchor="w", padx=(12, 0))
 
+        # 解法复盘：重新分析获取各阶段还原步骤（仅显示步骤，不含用时详情）
+        replay_text = ""
+        try:
+            from analyzer import CFOPAnalyzer
+            _, replay_analyzer, _ = CFOPAnalyzer.auto_detect_bottom_color(detail["scramble"], detail["solution"])
+            result = replay_analyzer.analyze()
+            phase_labels = {"cross": "Cross", "f2l1": "F2L-1", "f2l2": "F2L-2",
+                            "f2l3": "F2L-3", "f2l4": "F2L-4", "oll": "OLL", "pll": "PLL"}
+            from config import PHASE_ORDER
+            lines = []
+            for phase in PHASE_ORDER:
+                moves = result.get(phase, [])
+                if moves:
+                    merged = "".join(replay_analyzer._merge_moves(moves))
+                    lines.append(f"【{phase_labels.get(phase, phase)}】:{merged}")
+            replay_text = "\n".join(lines) if lines else detail["solution"]
+        except Exception:
+            replay_text = detail["solution"]
+
         solution_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
         solution_frame.pack(fill=tk.X, pady=(0, 4))
-        tk.Label(solution_frame, text="还原步骤:", font=("Microsoft YaHei", 9, "bold"),
+        tk.Label(solution_frame, text="解法复盘:", font=("Microsoft YaHei", 9, "bold"),
                  bg=THEME["card_bg"], fg=THEME["fg"]).pack(anchor="w")
-        sol_text = tk.Text(solution_frame, font=("Consolas", 9), height=3, wrap=tk.WORD,
+        sol_text = tk.Text(solution_frame, font=("Consolas", 9), height=8, wrap=tk.WORD,
                            bg=THEME["input_bg"], fg=THEME["fg"], relief="flat", borderwidth=0)
-        sol_text.insert("1.0", detail["solution"])
+        sol_text.insert("1.0", replay_text)
         sol_text.config(state="disabled")
         sol_text.pack(fill=tk.X, padx=(12, 0))
 
@@ -1902,11 +2118,6 @@ class CFOPAnalyzerGUI:
         self.solution_text.delete(0, tk.END)
         self.solution_text.insert(0, record["solution"])
 
-        bottom_color = record.get("bottom_color", "白")
-        bottom_name = self._get_bottom_name_from_color(bottom_color)
-        if bottom_name:
-            self.orientation_var.set(bottom_name)
-
     def _fill_multi_analysis(self, records: list):
         if self.analysis_mode_var.get() != '多组':
             self.analysis_mode_var.set('多组')
@@ -1914,7 +2125,7 @@ class CFOPAnalyzerGUI:
         else:
             if hasattr(self, 'multi_inputs') and self.multi_inputs:
                 for inp in self.multi_inputs:
-                    for key in ('num_label', 'scramble', 'orientation_combo', 'solution', 'del_btn'):
+                    for key in ('num_label', 'scramble', 'solution', 'del_btn'):
                         if key in inp:
                             inp[key].destroy()
                 self.multi_inputs.clear()
@@ -1928,11 +2139,6 @@ class CFOPAnalyzerGUI:
             inp['scramble'].insert(0, rec["scramble"])
             inp['solution'].delete(0, tk.END)
             inp['solution'].insert(0, rec["solution"])
-
-            bottom_color = rec.get("bottom_color", "白")
-            bottom_name = self._get_bottom_name_from_color(bottom_color)
-            if bottom_name:
-                inp['orientation_var'].set(bottom_name)
 
         self._update_multi_row_numbers()
         self._update_multi_count()
@@ -2089,30 +2295,19 @@ class CFOPAnalyzerGUI:
                                         highlightthickness=1, highlightbackground=THEME["border"],
                                         highlightcolor=THEME["accent"])
         self.scramble_entry.grid(row=0, column=1, sticky=tk.EW, pady=2, padx=(6, 0))
-        
-        tk.Label(input_frame, text="底色:", bg=THEME["card_bg"],
-                 fg=THEME["fg"], font=("Microsoft YaHei", 9)).grid(row=1, column=0, sticky=tk.W, pady=2)
-        
-        self.orientation_var = tk.StringVar(value=BOTTOM_COLOR_NAMES[0])
-        self.orientation_combo = ttk.Combobox(input_frame, textvariable=self.orientation_var,
-                                               width=12, state="readonly", font=("Microsoft YaHei", 9),
-                                               height=1)
-        self.orientation_combo['values'] = BOTTOM_COLOR_NAMES
-        self.orientation_combo.grid(row=1, column=1, sticky=tk.W, pady=2, padx=(6, 0))
-        self.orientation_combo.bind("<MouseWheel>", lambda e: "break")
-        
+
         tk.Label(input_frame, text="还原步骤 (回顾):", bg=THEME["card_bg"],
-                 fg=THEME["fg"], font=("Microsoft YaHei", 9)).grid(row=2, column=0, sticky=tk.W, pady=2)
+                 fg=THEME["fg"], font=("Microsoft YaHei", 9)).grid(row=1, column=0, sticky=tk.W, pady=2)
         self.solution_text = tk.Entry(input_frame, width=60,
                                        font=("Consolas", 9), bg=THEME["input_bg"],
                                        fg=THEME["fg"], relief="flat", borderwidth=0,
                                        highlightthickness=1, highlightbackground=THEME["border"],
                                        highlightcolor=THEME["accent"])
-        self.solution_text.grid(row=2, column=1, sticky=tk.EW, pady=2, padx=(6, 0))
-        
+        self.solution_text.grid(row=1, column=1, sticky=tk.EW, pady=2, padx=(6, 0))
+
         input_frame.columnconfigure(1, weight=1)
-        
-        self.mode_desc_label.config(text="单组模式：分析单次还原过程")
+
+        self.mode_desc_label.config(text="单组模式：分析单次还原过程（底色自动识别）")
     
     def _create_multi_input_ui(self):
         for widget in self.input_container.winfo_children():
@@ -2132,8 +2327,7 @@ class CFOPAnalyzerGUI:
         self.multi_rows_frame = tk.Frame(canvas, bg=THEME["card_bg"])
         
         self.multi_rows_frame.columnconfigure(1, weight=0)
-        self.multi_rows_frame.columnconfigure(2, weight=0)
-        self.multi_rows_frame.columnconfigure(3, weight=1)
+        self.multi_rows_frame.columnconfigure(2, weight=1)
         
         self.multi_rows_frame.bind("<Configure>", 
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
@@ -2164,12 +2358,10 @@ class CFOPAnalyzerGUI:
                  font=("Microsoft YaHei", 8, "bold"), width=3, anchor="w").grid(row=0, column=0, sticky="w")
         tk.Label(self.multi_rows_frame, text="打乱公式", bg=THEME["card_bg"], fg=THEME["fg"],
                  font=("Microsoft YaHei", 8, "bold"), anchor="w").grid(row=0, column=1, sticky="w", padx=(2, 0))
-        tk.Label(self.multi_rows_frame, text="底色", bg=THEME["card_bg"], fg=THEME["fg"],
-                 font=("Microsoft YaHei", 8, "bold"), anchor="w").grid(row=0, column=2, sticky="w", padx=(2, 0))
         tk.Label(self.multi_rows_frame, text="还原步骤", bg=THEME["card_bg"], fg=THEME["fg"],
-                 font=("Microsoft YaHei", 8, "bold"), anchor="w").grid(row=0, column=3, sticky="ew", padx=(2, 0))
+                 font=("Microsoft YaHei", 8, "bold"), anchor="w").grid(row=0, column=2, sticky="ew", padx=(2, 0))
         tk.Label(self.multi_rows_frame, text="", bg=THEME["card_bg"],
-                 font=("Microsoft YaHei", 8), width=2).grid(row=0, column=4, padx=(1, 0))
+                 font=("Microsoft YaHei", 8), width=2).grid(row=0, column=3, padx=(1, 0))
         
         btn_frame = tk.Frame(outer_frame, bg=THEME["card_bg"], pady=8)
         btn_frame.pack(fill=tk.X)
@@ -2184,7 +2376,7 @@ class CFOPAnalyzerGUI:
         for _ in range(5):
             self._add_multi_row()
         
-        self.mode_desc_label.config(text="多组模式：分析多组还原，计算平均、波动度等")
+        self.mode_desc_label.config(text="多组模式：分析多组还原，计算平均、波动度等（底色自动识别）")
         self._hide_timeline()
     
     def _add_multi_row(self):
@@ -2207,27 +2399,17 @@ class CFOPAnalyzerGUI:
                                   highlightthickness=1, highlightbackground=THEME["border"],
                                   highlightcolor=THEME["accent"])
         scramble_entry.grid(row=idx + 1, column=1, sticky="w", padx=(2, 0))
-        
-        orientation_var = tk.StringVar(value=BOTTOM_COLOR_NAMES[0])
-        orientation_combo = ttk.Combobox(self.multi_rows_frame, textvariable=orientation_var,
-                                          width=8, state="readonly", font=("Microsoft YaHei", 8),
-                                          height=1)
-        orientation_combo['values'] = BOTTOM_COLOR_NAMES
-        orientation_combo.grid(row=idx + 1, column=2, sticky="w", padx=(2, 0))
-        orientation_combo.bind("<MouseWheel>", lambda e: "break")
-        
+
         solution_entry = tk.Entry(self.multi_rows_frame, font=("Consolas", 8),
                                   bg=THEME["input_bg"], fg=THEME["fg"],
                                   relief="flat", borderwidth=0,
                                   highlightthickness=1, highlightbackground=THEME["border"],
                                   highlightcolor=THEME["accent"])
-        solution_entry.grid(row=idx + 1, column=3, sticky="ew", padx=(2, 0))
-        
+        solution_entry.grid(row=idx + 1, column=2, sticky="ew", padx=(2, 0))
+
         inp = {
             'num_label': num_label,
             'scramble': scramble_entry,
-            'orientation_var': orientation_var,
-            'orientation_combo': orientation_combo,
             'solution': solution_entry
         }
         
@@ -2236,12 +2418,11 @@ class CFOPAnalyzerGUI:
                             activebackground="#d63031", activeforeground="#fff",
                             relief="flat", borderwidth=0, cursor="hand2",
                             command=lambda: self._remove_multi_row_by_inp(inp))
-        del_btn.grid(row=idx + 1, column=4, padx=(2, 0))
+        del_btn.grid(row=idx + 1, column=3, padx=(2, 0))
         inp['del_btn'] = del_btn
-        
+
         if hasattr(self, 'multi_mousewheel_func'):
             scramble_entry.bind("<MouseWheel>", self.multi_mousewheel_func)
-            orientation_combo.bind("<MouseWheel>", lambda e: "break")
             solution_entry.bind("<MouseWheel>", self.multi_mousewheel_func)
             del_btn.bind("<MouseWheel>", self.multi_mousewheel_func)
         
@@ -2262,25 +2443,24 @@ class CFOPAnalyzerGUI:
             return
         
         if inp in self.multi_inputs:
-            for key in ('num_label', 'scramble', 'orientation_combo', 'solution', 'del_btn'):
+            for key in ('num_label', 'scramble', 'solution', 'del_btn'):
                 if key in inp:
                     inp[key].destroy()
             self.multi_inputs.remove(inp)
             self._update_multi_row_numbers()
             self._update_multi_count()
             self._reindex_multi_grid()
-    
+
     def _update_multi_row_numbers(self):
         for i, inp in enumerate(self.multi_inputs):
             inp['num_label'].config(text=f"{i+1}")
-    
+
     def _reindex_multi_grid(self):
         for i, inp in enumerate(self.multi_inputs):
             inp['num_label'].grid(row=i + 1, column=0, sticky="w")
             inp['scramble'].grid(row=i + 1, column=1, sticky="w", padx=(2, 0))
-            inp['orientation_combo'].grid(row=i + 1, column=2, sticky="w", padx=(2, 0))
-            inp['solution'].grid(row=i + 1, column=3, sticky="ew", padx=(2, 0))
-            inp['del_btn'].grid(row=i + 1, column=4, padx=(2, 0))
+            inp['solution'].grid(row=i + 1, column=2, sticky="ew", padx=(2, 0))
+            inp['del_btn'].grid(row=i + 1, column=3, padx=(2, 0))
     
     def _update_multi_count(self):
         count = len(self.multi_inputs) if hasattr(self, 'multi_inputs') else 0
@@ -2318,12 +2498,11 @@ class CFOPAnalyzerGUI:
             config = load_config()
             config["scramble"] = self.scramble_entry.get().strip()
             config["solution"] = self.solution_text.get().strip()
-            config["orientation"] = self.orientation_var.get()
             config["analysis_mode"] = "单组"
             save_config(config)
         except Exception:
             pass
-    
+
     def _save_multi_data(self):
         try:
             config = load_config()
@@ -2332,7 +2511,6 @@ class CFOPAnalyzerGUI:
                 group_data = {
                     "scramble": inp['scramble'].get().strip(),
                     "solution": inp['solution'].get().strip(),
-                    "orientation": inp['orientation_var'].get(),
                 }
                 multi_data.append(group_data)
             config["multi_groups"] = multi_data
@@ -2364,8 +2542,6 @@ class CFOPAnalyzerGUI:
                 self.scramble_entry.insert(0, config["scramble"])
             if config.get("solution"):
                 self.solution_text.insert(0, config["solution"])
-            if config.get("orientation"):
-                self.orientation_var.set(self._get_bottom_name_from_saved(config["orientation"]))
         except Exception:
             pass
     
@@ -2382,8 +2558,6 @@ class CFOPAnalyzerGUI:
                     inp = self.multi_inputs[i]
                     inp['scramble'].insert(0, g.get('scramble', ''))
                     inp['solution'].insert(0, g.get('solution', ''))
-                    orientation = g.get('orientation', BOTTOM_COLOR_NAMES[0])
-                    inp['orientation_var'].set(self._get_bottom_name_from_saved(orientation))
                 except Exception:
                     pass
     
@@ -2769,15 +2943,7 @@ class CFOPAnalyzerGUI:
         solution = self.solution_text.get().strip()
         api_key = self.api_key_entry.get().strip()
         model = self.model_var.get()
-        
-        bottom_name = self.orientation_var.get()
-        bottom_color = self._get_bottom_color_from_name(bottom_name)
-        
-        if not bottom_color:
-            self._reset_analysis_ui()
-            messagebox.showwarning("错误", "请选择有效的底色")
-            return
-        
+
         if not scramble or not solution:
             self._reset_analysis_ui()
             messagebox.showwarning("警告", "请先输入打乱公式和还原步骤！")
@@ -2790,13 +2956,12 @@ class CFOPAnalyzerGUI:
             self._reset_analysis_ui()
             messagebox.showwarning("警告", "请选择模型！")
             return
-        
-        log.info(f"开始AI分析, 模型: {model}, 打乱: {scramble}, 底色: {bottom_color}")
 
         self._start_ai_status_animation("building")
 
         try:
-            analyzer = CFOPAnalyzer.from_bottom_color(scramble, solution, bottom_color)
+            bottom_color, analyzer, _ = CFOPAnalyzer.auto_detect_bottom_color(scramble, solution)
+            bottom_name = COLOR_NAMES.get(bottom_color, bottom_color)
 
             validation_errors = self._validate_analyzer(analyzer)
             if validation_errors:
@@ -2909,7 +3074,8 @@ class CFOPAnalyzerGUI:
             if self._solution_summary:
                 self.result_text.insert(tk.END, self._solution_summary, "normal")
                 self.result_text.insert(tk.END, "\n\n", "normal")
-            render_markdown(self.result_text, self._stream_buffer)
+            display_text = self._format_tags_in_report(self._stream_buffer)
+            render_markdown(self.result_text, display_text)
         elif self._reasoning_buffer:
             self.result_text.insert(tk.END, "🤔 AI思考中...\n\n", "italic")
             thinking_preview = self._reasoning_buffer[-500:] if len(self._reasoning_buffer) > 500 else self._reasoning_buffer
@@ -2940,8 +3106,121 @@ class CFOPAnalyzerGUI:
         self._stop_ai_status_animation()
         self._set_status("分析完成")
         self.root.after(3000, self._clear_status)
+        self._parse_and_store_tags()
         self._save_to_memory()
-    
+
+    def _parse_and_store_tags(self):
+        """解析AI返回的标签并暂存，等待_save_to_memory时一并写入数据库"""
+        import re
+        from config import STRENGTH_TAGS, WEAKNESS_TAGS
+        valid_strength = set(STRENGTH_TAGS)
+        valid_weakness = set(WEAKNESS_TAGS)
+
+        mode = self.analysis_mode_var.get()
+        text = self._stream_buffer or ""
+
+        if mode == '单组':
+            # 查找 <tags>...</tags>
+            match = re.search(r'<tags>\s*(\{.*?\})\s*</tags>', text, re.DOTALL)
+            if match:
+                try:
+                    import json
+                    tags = json.loads(match.group(1))
+                    s_tags = [t for t in tags.get("strength", []) if t in valid_strength][:3]
+                    w_tags = [t for t in tags.get("weakness", []) if t in valid_weakness][:3]
+                    self._pending_tags = {"strength": s_tags, "weakness": w_tags}
+                except (json.JSONDecodeError, Exception):
+                    self._pending_tags = None
+            else:
+                self._pending_tags = None
+        else:
+            # 多组：查找所有 <tags group="N">...</tags>
+            matches = re.finditer(r'<tags\s+group="(\d+)"\s*>\s*(\{.*?\})\s*</tags>', text, re.DOTALL)
+            group_tags = {}
+            for m in matches:
+                try:
+                    import json
+                    group_idx = int(m.group(1))
+                    tags = json.loads(m.group(2))
+                    s_tags = [t for t in tags.get("strength", []) if t in valid_strength][:3]
+                    w_tags = [t for t in tags.get("weakness", []) if t in valid_weakness][:3]
+                    group_tags[group_idx] = {"strength": s_tags, "weakness": w_tags}
+                except (json.JSONDecodeError, Exception):
+                    pass
+            self._pending_multi_tags = group_tags if group_tags else None
+
+    def _format_tags_in_report(self, text: str) -> str:
+        """将AI返回的<tags>JSON转为可读格式"""
+        import re
+        import json
+
+        def replace_single_tag(match):
+            try:
+                tags = json.loads(match.group(1))
+                s = "、".join(tags.get("strength", []))
+                w = "、".join(tags.get("weakness", []))
+                parts = []
+                if s:
+                    parts.append(f"**优点**: {s}")
+                if w:
+                    parts.append(f"**缺点**: {w}")
+                return " | ".join(parts) if parts else ""
+            except (json.JSONDecodeError, Exception):
+                return ""
+
+        def replace_multi_tag(match):
+            try:
+                group_idx = match.group(1)
+                tags = json.loads(match.group(2))
+                s = "、".join(tags.get("strength", []))
+                w = "、".join(tags.get("weakness", []))
+                parts = [f"第{group_idx}组:"]
+                if s:
+                    parts.append(f"优点:{s}")
+                if w:
+                    parts.append(f"缺点:{w}")
+                return " ".join(parts)
+            except (json.JSONDecodeError, Exception):
+                return ""
+
+        # 先处理多组标签 <tags group="N">...</tags>
+        text = re.sub(r'<tags\s+group="(\d+)"\s*>\s*(\{.*?\})\s*</tags>', replace_multi_tag, text, flags=re.DOTALL)
+        # 再处理单组标签 <tags>...</tags>
+        text = re.sub(r'<tags>\s*(\{.*?\})\s*</tags>', replace_single_tag, text, flags=re.DOTALL)
+        return text
+
+    def _save_ao12_tags(self, ao12_items, raw_text):
+        """从Ao12分析结果中解析标签并保存到对应记录的数据库"""
+        import re
+        import json
+        from config import STRENGTH_TAGS, WEAKNESS_TAGS
+        valid_strength = set(STRENGTH_TAGS)
+        valid_weakness = set(WEAKNESS_TAGS)
+
+        if not ao12_items or not raw_text:
+            return
+
+        # 查找所有 <tags group="N">...</tags>
+        matches = re.finditer(r'<tags\s+group="(\d+)"\s*>\s*(\{.*?\})\s*</tags>', raw_text, re.DOTALL)
+        for m in matches:
+            try:
+                group_idx = int(m.group(1))
+                tags = json.loads(m.group(2))
+                s_tags = [t for t in tags.get("strength", []) if t in valid_strength][:3]
+                w_tags = [t for t in tags.get("weakness", []) if t in valid_weakness][:3]
+
+                # group_idx从1开始，对应ao12_items列表索引
+                idx = group_idx - 1
+                if 0 <= idx < len(ao12_items):
+                    item = ao12_items[idx]
+                    record_id = memory_db.find_record_id(
+                        item["scramble"], item["solution"], item["total_time"]
+                    )
+                    if record_id:
+                        memory_db.update_record_tags(record_id, s_tags, w_tags)
+            except (json.JSONDecodeError, Exception):
+                pass
+
     def _build_memory_text(self) -> str:
         from config import PHASE_ORDER
         period_avgs = memory_db.get_all_averages_by_period()
@@ -3145,27 +3424,83 @@ class CFOPAnalyzerGUI:
         return "\n".join(lines) + "\n"
 
     def _save_to_memory(self):
-        if not self._use_memory_var.get():
-            return
         mode = self.analysis_mode_var.get()
         try:
+            # 无论是否启用记忆保存，都要更新已有记录的标签
             if mode == '单组':
                 if not hasattr(self, '_last_analyzer') or not self._last_analyzer:
                     return
                 analyzer = self._last_analyzer
-                stats = analyzer.get_phase_stats()
                 scramble_text = self.scramble_entry.get().strip() if hasattr(self, 'scramble_entry') else ""
                 solution_text = self.solution_text.get().strip() if hasattr(self, 'solution_text') else ""
                 total_time = analyzer.get_total_time()
-                bottom_name = self.orientation_var.get() if hasattr(self, 'orientation_var') else ""
-                memory_db.save_record(scramble_text, solution_text, total_time, bottom_name, stats)
+
+                # 保存标签到局部变量，避免被提前清空
+                pending = getattr(self, '_pending_tags', None)
+                self._pending_tags = None
+
+                # 更新已有记录的标签
+                if pending:
+                    record_id = memory_db.find_record_id(scramble_text, solution_text, total_time)
+                    if record_id:
+                        memory_db.update_record_tags(record_id,
+                                                      pending["strength"],
+                                                      pending["weakness"])
+
+                if not self._use_memory_var.get():
+                    self._update_memory_count()
+                    if hasattr(self, '_refresh_home_stats'):
+                        self._refresh_home_stats()
+                    if hasattr(self, '_refresh_data_tab'):
+                        self._refresh_data_tab()
+                    return
+                stats = analyzer.get_phase_stats()
+                bottom_name = COLOR_NAMES.get(analyzer.bottom_color, "白")
+                record_id = memory_db.save_record(scramble_text, solution_text, total_time, bottom_name, stats)
+                if record_id == 0:
+                    record_id = memory_db.find_record_id(scramble_text, solution_text, total_time)
+                # 新记录也需要写入标签
+                if record_id and pending:
+                    memory_db.update_record_tags(record_id,
+                                                  pending["strength"],
+                                                  pending["weakness"])
             else:
                 if not hasattr(self, '_last_multi_data') or not self._last_multi_data:
                     return
-                for g, analyzer in self._last_multi_data:
+                # 保存标签到局部变量，避免被提前清空
+                multi_tags = getattr(self, '_pending_multi_tags', None) or {}
+                self._pending_multi_tags = None
+
+                # 更新已有记录的标签
+                for idx, (g, analyzer) in enumerate(self._last_multi_data):
+                    total_time = analyzer.get_total_time()
+                    group_idx = idx + 1
+                    tags = multi_tags.get(group_idx)
+                    if tags:
+                        record_id = memory_db.find_record_id(g['scramble'], g['solution'], total_time)
+                        if record_id:
+                            memory_db.update_record_tags(record_id, tags["strength"], tags["weakness"])
+
+                if not self._use_memory_var.get():
+                    self._update_memory_count()
+                    if hasattr(self, '_refresh_home_stats'):
+                        self._refresh_home_stats()
+                    if hasattr(self, '_refresh_data_tab'):
+                        self._refresh_data_tab()
+                    return
+
+                for idx, (g, analyzer) in enumerate(self._last_multi_data):
                     stats = analyzer.get_phase_stats()
                     total_time = analyzer.get_total_time()
-                    memory_db.save_record(g['scramble'], g['solution'], total_time, g['bottom_name'], stats)
+                    bottom_name = g.get('bottom_name', COLOR_NAMES.get(analyzer.bottom_color, "白"))
+                    record_id = memory_db.save_record(g['scramble'], g['solution'], total_time, bottom_name, stats)
+                    if record_id == 0:
+                        record_id = memory_db.find_record_id(g['scramble'], g['solution'], total_time)
+                    # 新记录也需要写入标签
+                    group_idx = idx + 1
+                    tags = multi_tags.get(group_idx)
+                    if record_id and tags:
+                        memory_db.update_record_tags(record_id, tags["strength"], tags["weakness"])
             self._update_memory_count()
             if hasattr(self, '_refresh_home_stats'):
                 self._refresh_home_stats()
@@ -3423,16 +3758,19 @@ class CFOPAnalyzerGUI:
 
                 return content_buffer
 
-            def _stream_ao12_analysis(api_key, model, analyzers, which):
+            def _stream_ao12_analysis(api_key, model, ao12_items, which):
                 from openai import OpenAI
 
+                # 从字典列表中提取analyzer对象
+                analyzers_only = [item["analyzer"] for item in ao12_items]
+
                 memory_text = self._build_memory_text() if self._use_memory_var.get() else ""
-                comparison_text = self._build_multi_comparison_text(analyzers) if self._use_memory_var.get() else ""
+                comparison_text = self._build_multi_comparison_text(analyzers_only) if self._use_memory_var.get() else ""
                 system_prompt, user_prompt = self._build_multi_analysis_prompts(
-                    analyzers, memory_text + comparison_text
+                    analyzers_only, memory_text + comparison_text
                 )
 
-                count = len(analyzers)
+                count = len(analyzers_only)
                 multi_max_tokens = 4096 + count * 800
                 if multi_max_tokens > 16384:
                     multi_max_tokens = 16384
@@ -3456,7 +3794,14 @@ class CFOPAnalyzerGUI:
                     elif delta.content:
                         yield ("content", delta.content)
 
+            # 用于在_on_ai_done中保存标签
+            analyzers_best_items = []
+            analyzers_worst_items = []
+            best_analysis_holder = {"raw": ""}
+            worst_analysis_holder = {"raw": ""}
+
             def _run():
+                nonlocal analyzers_best_items, analyzers_worst_items
                 try:
                     summary_result = _stream_step(
                         api_key, model,
@@ -3469,25 +3814,27 @@ class CFOPAnalyzerGUI:
                     worst_analysis = ""
 
                     if analyze_best:
-                        analyzers_best = _build_ao12_analyzers(stats, "best")
-                        if analyzers_best:
+                        analyzers_best_items = _build_ao12_analyzers(stats, "best")
+                        if analyzers_best_items:
                             best_analysis = _stream_step(
                                 api_key, model,
-                                lambda ak, md, a=analyzers_best: _stream_ao12_analysis(ak, md, a, "best"),
+                                lambda ak, md, a=analyzers_best_items: _stream_ao12_analysis(ak, md, a, "best"),
                                 "🏆 正在分析最佳Ao12..."
                             )
+                            best_analysis_holder["raw"] = best_analysis
                         else:
                             best_analysis = "最佳Ao12分析: 无法解析有效数据"
                         ao12_analysis_holder["best"] = best_analysis
 
                     if analyze_worst:
-                        analyzers_worst = _build_ao12_analyzers(stats, "worst")
-                        if analyzers_worst:
+                        analyzers_worst_items = _build_ao12_analyzers(stats, "worst")
+                        if analyzers_worst_items:
                             worst_analysis = _stream_step(
                                 api_key, model,
-                                lambda ak, md, a=analyzers_worst: _stream_ao12_analysis(ak, md, a, "worst"),
+                                lambda ak, md, a=analyzers_worst_items: _stream_ao12_analysis(ak, md, a, "worst"),
                                 "📉 正在分析最差Ao12..."
                             )
+                            worst_analysis_holder["raw"] = worst_analysis
                         else:
                             worst_analysis = "最差Ao12分析: 无法解析有效数据"
                         ao12_analysis_holder["worst"] = worst_analysis
@@ -3519,7 +3866,12 @@ class CFOPAnalyzerGUI:
                 try:
                     analyzer = CFOPAnalyzer.from_bottom_color(scramble, solution, bottom_color)
                     if analyzer.is_solve_complete():
-                        analyzers.append(analyzer)
+                        analyzers.append({
+                            "analyzer": analyzer,
+                            "scramble": scramble,
+                            "solution": solution,
+                            "total_time": analyzer.get_total_time()
+                        })
                 except Exception:
                     continue
 
@@ -3527,6 +3879,14 @@ class CFOPAnalyzerGUI:
 
         def _on_ai_done(result, best_analysis, worst_analysis):
             ai_btn.config(state="normal", text="🤖 AI总结")
+
+            # 格式化Ao12分析结果中的标签，并保存到数据库
+            if best_analysis:
+                best_analysis = self._format_tags_in_report(best_analysis)
+                self._save_ao12_tags(analyzers_best_items, best_analysis_holder.get("raw", ""))
+            if worst_analysis:
+                worst_analysis = self._format_tags_in_report(worst_analysis)
+                self._save_ao12_tags(analyzers_worst_items, worst_analysis_holder.get("raw", ""))
 
             report_text.config(state="normal")
             report_text.delete("1.0", tk.END)
@@ -3614,25 +3974,16 @@ class CFOPAnalyzerGUI:
         for i, inp in enumerate(self.multi_inputs):
             scramble = inp['scramble'].get().strip()
             solution = inp['solution'].get().strip()
-            bottom_name = inp['orientation_var'].get()
-            bottom_color = self._get_bottom_color_from_name(bottom_name)
-            
-            if not bottom_color:
-                self._reset_analysis_ui()
-                messagebox.showwarning("警告", f"第 {i+1} 组底色无效，请检查！")
-                return
-            
+
             if not scramble or not solution:
                 self._reset_analysis_ui()
                 messagebox.showwarning("警告", f"第 {i+1} 组数据不完整，请检查！")
                 return
-            
+
             groups_data.append({
                 'index': i + 1,
                 'scramble': scramble,
                 'solution': solution,
-                'bottom_color': bottom_color,
-                'bottom_name': bottom_name
             })
         
         count = len(groups_data)
@@ -3643,7 +3994,9 @@ class CFOPAnalyzerGUI:
         analyzers = []
         for g in groups_data:
             try:
-                analyzer = CFOPAnalyzer.from_bottom_color(g['scramble'], g['solution'], g['bottom_color'])
+                bottom_color, analyzer, _ = CFOPAnalyzer.auto_detect_bottom_color(g['scramble'], g['solution'])
+                g['bottom_color'] = bottom_color
+                g['bottom_name'] = COLOR_NAMES.get(bottom_color, bottom_color)
                 validation_errors = self._validate_analyzer(analyzer)
                 if validation_errors:
                     self._reset_analysis_ui()
@@ -3773,7 +4126,7 @@ class CFOPAnalyzerGUI:
         threading.Thread(target=do_stream, daemon=True).start()
     
     def _build_multi_analysis_prompts(self, analyzers, memory_text=""):
-        from config import SYSTEM_PROMPT, USER_MULTI_TEMPLATE, AI_PAUSE_THRESHOLD_SEC
+        from config import SYSTEM_PROMPT, USER_MULTI_TEMPLATE, AI_PAUSE_THRESHOLD_SEC, STRENGTH_TAGS, WEAKNESS_TAGS
         
         count = len(analyzers)
         
@@ -3792,7 +4145,11 @@ class CFOPAnalyzerGUI:
             groups_detail += analyzer.format_output()
             groups_detail += "\n"
         
-        system = SYSTEM_PROMPT.format(pause_threshold=AI_PAUSE_THRESHOLD_SEC)
+        system = SYSTEM_PROMPT.format(
+            pause_threshold=AI_PAUSE_THRESHOLD_SEC,
+            strength_tags_str="、".join(STRENGTH_TAGS),
+            weakness_tags_str="、".join(WEAKNESS_TAGS)
+        )
         user = USER_MULTI_TEMPLATE.format(
             count=count,
             groups_times=', '.join([f'{t:.2f}s' for t in times]),

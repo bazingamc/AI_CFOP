@@ -8,7 +8,7 @@ import csv
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
-from config import APP_DIR
+from config import APP_DIR, COLOR_NAMES
 
 DB_FILE = os.path.join(APP_DIR, "cfop_memory.db")
 
@@ -73,6 +73,12 @@ def init_db():
     col_names = [col[1] for col in col_check]
     if 'user_id' not in col_names:
         c.execute("ALTER TABLE records ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
+    if 'analyzed' not in col_names:
+        c.execute("ALTER TABLE records ADD COLUMN analyzed INTEGER NOT NULL DEFAULT 0")
+    if 'strength_tags' not in col_names:
+        c.execute("ALTER TABLE records ADD COLUMN strength_tags TEXT NOT NULL DEFAULT ''")
+    if 'weakness_tags' not in col_names:
+        c.execute("ALTER TABLE records ADD COLUMN weakness_tags TEXT NOT NULL DEFAULT ''")
 
     c.execute("CREATE INDEX IF NOT EXISTS idx_phase_stats_record ON phase_stats(record_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_phase_stats_phase ON phase_stats(phase)")
@@ -210,19 +216,25 @@ def get_averages(days: Optional[int] = None, limit: int = 1000) -> Dict[str, Dic
     return result
 
 
-def get_records_by_date(date_str: str = None) -> List[Dict]:
+def get_records_by_date(date_str: str = None, start_date: str = None, end_date: str = None) -> List[Dict]:
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
-    if date_str:
+    if start_date and end_date:
         c.execute(
-            "SELECT id, date, scramble, solution, total_time, bottom_color "
+            "SELECT id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags "
+            "FROM records WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date ASC",
+            (uid, start_date, end_date + " 23:59:59")
+        )
+    elif date_str:
+        c.execute(
+            "SELECT id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags "
             "FROM records WHERE user_id = ? AND date LIKE ? ORDER BY date ASC",
             (uid, f"{date_str}%")
         )
     else:
         c.execute(
-            "SELECT id, date, scramble, solution, total_time, bottom_color "
+            "SELECT id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags "
             "FROM records WHERE user_id = ? ORDER BY date ASC",
             (uid,)
         )
@@ -230,7 +242,8 @@ def get_records_by_date(date_str: str = None) -> List[Dict]:
     for row in c.fetchall():
         records.append({
             "id": row[0], "date": row[1], "scramble": row[2],
-            "solution": row[3], "total_time": row[4], "bottom_color": row[5]
+            "solution": row[3], "total_time": row[4], "bottom_color": row[5],
+            "analyzed": row[6], "strength_tags": row[7], "weakness_tags": row[8]
         })
     conn.close()
     return records
@@ -240,7 +253,7 @@ def get_record_detail(record_id: int) -> Optional[Dict]:
     conn = _get_conn()
     c = conn.cursor()
     c.execute(
-        "SELECT id, date, scramble, solution, total_time, bottom_color "
+        "SELECT id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags "
         "FROM records WHERE id = ?",
         (record_id,)
     )
@@ -250,7 +263,8 @@ def get_record_detail(record_id: int) -> Optional[Dict]:
         return None
     record = {
         "id": row[0], "date": row[1], "scramble": row[2],
-        "solution": row[3], "total_time": row[4], "bottom_color": row[5]
+        "solution": row[3], "total_time": row[4], "bottom_color": row[5],
+        "analyzed": row[6], "strength_tags": row[7], "weakness_tags": row[8]
     }
     c.execute(
         "SELECT phase, steps, time, observation_time, stutter_count, wasted_moves, tps "
@@ -388,6 +402,60 @@ def get_total_tps_std(days: Optional[int] = None, limit: int = 1000) -> Optional
     return round(_std_dev(tps_values), 2)
 
 
+def find_record_id(scramble: str, solution: str, total_time: float) -> Optional[int]:
+    """根据打乱公式、还原步骤和总用时查找已有记录ID"""
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    c.execute(
+        "SELECT id FROM records WHERE user_id = ? AND scramble = ? AND solution = ? AND ABS(total_time - ?) < 0.01 LIMIT 1",
+        (uid, scramble, solution, total_time)
+    )
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def update_record_tags(record_id: int, strength_tags: list, weakness_tags: list):
+    """更新记录的优缺点标签，并标记为已分析"""
+    conn = _get_conn()
+    c = conn.cursor()
+    s_str = ",".join(strength_tags) if strength_tags else ""
+    w_str = ",".join(weakness_tags) if weakness_tags else ""
+    c.execute("UPDATE records SET analyzed = 1, strength_tags = ?, weakness_tags = ? WHERE id = ?",
+              (s_str, w_str, record_id))
+    conn.commit()
+    conn.close()
+
+
+def get_tag_stats() -> dict:
+    """获取优缺点标签的出现次数统计"""
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    c.execute("SELECT strength_tags, weakness_tags FROM records WHERE user_id = ? AND analyzed = 1", (uid,))
+
+    strength_count = {}
+    weakness_count = {}
+    for row in c.fetchall():
+        if row[0]:
+            for tag in row[0].split(","):
+                tag = tag.strip()
+                if tag:
+                    strength_count[tag] = strength_count.get(tag, 0) + 1
+        if row[1]:
+            for tag in row[1].split(","):
+                tag = tag.strip()
+                if tag:
+                    weakness_count[tag] = weakness_count.get(tag, 0) + 1
+    conn.close()
+
+    # 按次数降序排列，取TOP3
+    top_strengths = sorted(strength_count.items(), key=lambda x: x[1], reverse=True)[:3]
+    top_weaknesses = sorted(weakness_count.items(), key=lambda x: x[1], reverse=True)[:3]
+    return {"top_strengths": top_strengths, "top_weaknesses": top_weaknesses}
+
+
 def delete_records(record_ids: List[int]) -> int:
     if not record_ids:
         return 0
@@ -474,6 +542,142 @@ def _is_cross_pre_solved(scramble: str) -> bool:
     return False
 
 
+def import_csv(file_path: str, progress_cb=None) -> dict:
+    from analyzer import CFOPAnalyzer, set_logger as a_set_logger, PHASE_ORDER
+
+    results = {"total": 0, "imported": 0, "skipped_no_review": 0, "skipped_parse_error": 0,
+               "skipped_duplicate": 0, "skipped_incomplete": 0, "skipped_abnormal": 0,
+               "skipped_cross_solved": 0}
+
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    c.execute("SELECT scramble, solution, total_time FROM records WHERE user_id = ?", (uid,))
+    existing_keys = set((row[0], row[1], row[2]) for row in c.fetchall())
+
+    c.execute("SELECT total_time FROM records WHERE user_id = ?", (uid,))
+    all_times = [row[0] for row in c.fetchall() if row[0] is not None]
+    db_count = len(all_times)
+    db_avg_time = _trimmed_mean(all_times) if db_count > 0 else None
+
+    # 读取CSV并按还原分组
+    groups = {}
+    with open(file_path, "r", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            date = row.get("日期", "").strip()
+            scramble = row.get("打乱公式", "").strip()
+            solution = row.get("还原步骤", "").strip()
+            total_time_str = row.get("总时间(s)", "").strip()
+            bottom_color = row.get("底色", "").strip()
+            phase = row.get("阶段", "").strip()
+
+            key = (date, scramble, solution)
+            if key not in groups:
+                try:
+                    total_time = float(total_time_str)
+                except (ValueError, TypeError):
+                    results["skipped_parse_error"] += 1
+                    continue
+                groups[key] = {
+                    "date": date, "scramble": scramble, "solution": solution,
+                    "total_time": total_time, "bottom_color": bottom_color,
+                    "phases": {}
+                }
+            if phase:
+                try:
+                    groups[key]["phases"][phase] = {
+                        "steps": int(float(row.get("步数", 0))),
+                        "time": float(row.get("用时(s)", 0)),
+                        "observation_time": float(row.get("观察时间(s)", 0)),
+                        "stutter_count": int(float(row.get("卡顿次数", 0))),
+                        "wasted_moves": int(float(row.get("废步数量", 0))),
+                        "tps": float(row.get("TPS", 0)),
+                    }
+                except (ValueError, TypeError):
+                    pass
+
+    group_list = list(groups.values())
+    results["total"] = len(group_list)
+
+    for idx, g in enumerate(group_list):
+        if progress_cb and idx % 10 == 0:
+            progress_cb(idx, len(group_list))
+
+        try:
+            scramble = g["scramble"]
+            solution = g["solution"]
+            total_time = g["total_time"]
+
+            # 去重检查
+            if (scramble, solution, total_time) in existing_keys:
+                results["skipped_duplicate"] += 1
+                continue
+
+            # 无还原步骤
+            if not solution or "@" not in solution:
+                results["skipped_no_review"] += 1
+                continue
+
+            # Cross预还原检测
+            if scramble and _is_cross_pre_solved(scramble):
+                results["skipped_cross_solved"] += 1
+                continue
+
+            # 重新分析验证合理性
+            try:
+                bottom_color, analyzer, _ = CFOPAnalyzer.auto_detect_bottom_color(scramble, solution)
+                phase_result = analyzer.analyze()
+            except Exception:
+                results["skipped_parse_error"] += 1
+                continue
+
+            if not phase_result or all(len(v) == 0 for v in phase_result.values()):
+                results["skipped_parse_error"] += 1
+                continue
+
+            if not analyzer.is_solve_complete():
+                results["skipped_incomplete"] += 1
+                continue
+
+            # 异常时间检测
+            if db_count >= 100 and db_avg_time and total_time > db_avg_time * 2:
+                results["skipped_abnormal"] += 1
+                continue
+
+            # 使用重新分析的结果（而非CSV中的阶段数据，确保一致性）
+            stats = analyzer.get_phase_stats()
+            bottom_color_name = COLOR_NAMES.get(bottom_color, "白")
+
+            c.execute(
+                "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color) VALUES (?, ?, ?, ?, ?, ?)",
+                (uid, g["date"], scramble, solution, total_time, bottom_color_name)
+            )
+            record_id = c.lastrowid
+            for phase in PHASE_ORDER:
+                if phase in stats:
+                    s = stats[phase]
+                    c.execute(
+                        "INSERT INTO phase_stats (record_id, phase, steps, time, observation_time, stutter_count, wasted_moves, tps) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (record_id, phase,
+                         s.get("steps", 0), s.get("time", 0),
+                         s.get("observation_time", 0), s.get("stutter_count", 0),
+                         s.get("wasted_moves", 0), s.get("tps", 0))
+                    )
+            existing_keys.add((scramble, solution, total_time))
+            results["imported"] += 1
+        except Exception:
+            results["skipped_parse_error"] += 1
+
+    conn.commit()
+    conn.close()
+
+    if progress_cb:
+        progress_cb(len(group_list), len(group_list))
+
+    return results
+
+
 def import_cstimer(file_path: str, progress_cb=None) -> dict:
     import json
     from analyzer import CFOPAnalyzer, set_logger as a_set_logger, PHASE_ORDER, AI_PAUSE_THRESHOLD_SEC
@@ -535,7 +739,7 @@ def import_cstimer(file_path: str, progress_cb=None) -> dict:
             total_time = total_time_ms / 1000.0
 
             try:
-                analyzer = CFOPAnalyzer.from_bottom_color(scramble, review_str, "W")
+                bottom_color, analyzer, _ = CFOPAnalyzer.auto_detect_bottom_color(scramble, review_str)
                 phase_result = analyzer.analyze()
             except Exception:
                 results["skipped_parse_error"] += 1
@@ -556,9 +760,10 @@ def import_cstimer(file_path: str, progress_cb=None) -> dict:
             stats = analyzer.get_phase_stats()
             date_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S") if timestamp else ""
 
+            bottom_color_name = COLOR_NAMES.get(bottom_color, "白")
             c.execute(
                 "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color) VALUES (?, ?, ?, ?, ?, ?)",
-                (uid, date_str, scramble, review_str, total_time, "白")
+                (uid, date_str, scramble, review_str, total_time, bottom_color_name)
             )
             record_id = c.lastrowid
             for phase in PHASE_ORDER:

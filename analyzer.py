@@ -8,7 +8,7 @@ from config import (
     AI_MAX_RESPONSE_WORDS, AI_PAUSE_THRESHOLD_SEC,
     PHASE_ORDER, PHASE_NAMES,
     SYSTEM_PROMPT, USER_SINGLE_TEMPLATE, PHASE_DETAIL_TEMPLATE,
-    OPPOSITE_COLORS, COLOR_NAMES
+    OPPOSITE_COLORS, COLOR_NAMES, STRENGTH_TAGS, WEAKNESS_TAGS
 )
 from cube import Cube
 from move_utils import parse_moves, parse_timed_moves, validate_orientation
@@ -26,6 +26,161 @@ class CFOPAnalyzer:
     """CFOP还原过程分析器"""
 
     COLOR_ORDER = ['W', 'Y', 'G', 'B', 'R', 'O']
+
+    # 自动底色识别的高分阈值，超过此分数即认为底色确定，不再尝试后续颜色
+    AUTO_BOTTOM_HIGH_SCORE_THRESHOLD = 500.0
+
+    @classmethod
+    def auto_detect_bottom_color(cls, scramble: str, solution: str) -> tuple:
+        """自动识别底色，返回 (bottom_color, analyzer, all_scores)
+
+        按照白黄绿蓝红橙的顺序，依次尝试每种底色进行CFOP还原步骤识别，
+        对各阶段步数分配进行合理性评分，找到最合理的一种底色。
+        如果先识别到一个合理性评分很高的底色，就不再识别后续的底色。
+
+        Returns:
+            tuple: (bottom_color, best_analyzer, all_scores)
+                bottom_color: 识别到的底色代码 (如 'W')
+                best_analyzer: 最佳分析器实例
+                all_scores: [(bottom_color, score), ...] 所有尝试过的底色评分
+        """
+        bottom_candidates = ['W', 'Y', 'G', 'B', 'R', 'O']
+
+        original_level = log.level if log else None
+        if log:
+            log.setLevel(max(log.level, 30))
+
+        all_scores = []
+        best_score = float('-inf')
+        best_analyzer = None
+        best_bottom = None
+
+        for bottom_color in bottom_candidates:
+            try:
+                analyzer = cls.from_bottom_color(scramble, solution, bottom_color)
+            except (ValueError, Exception):
+                continue
+
+            score = cls._score_bottom_color(analyzer)
+            all_scores.append((bottom_color, score))
+
+            if log:
+                bn = COLOR_NAMES.get(bottom_color, bottom_color)
+                log.debug(f"[auto_detect] 底色={bn}, 评分={score:.1f}")
+
+            if score > best_score:
+                best_score = score
+                best_analyzer = analyzer
+                best_bottom = bottom_color
+
+            # 高分阈值：如果评分很高，提前终止
+            if score >= cls.AUTO_BOTTOM_HIGH_SCORE_THRESHOLD:
+                if log:
+                    bn = COLOR_NAMES.get(bottom_color, bottom_color)
+                    log.info(f"[auto_detect] 底色={bn} 评分 {score:.1f} 超过阈值，提前确定")
+                break
+
+        if log and original_level is not None:
+            log.setLevel(original_level)
+
+        if best_analyzer is None:
+            # 全部失败，默认白色
+            try:
+                best_analyzer = cls.from_bottom_color(scramble, solution, 'W')
+            except Exception:
+                pass
+            best_bottom = best_bottom or 'W'
+
+        if log:
+            bn = COLOR_NAMES.get(best_bottom, best_bottom)
+            log.info(f"[auto_detect] 最终底色={bn}, 评分={best_score:.1f}, 候选评分={all_scores}")
+
+        return best_bottom, best_analyzer, all_scores
+
+    @classmethod
+    def _score_bottom_color(cls, analyzer) -> float:
+        """对给定底色的分析结果进行合理性评分
+
+        评分依据：
+        1. 阶段完整性：7个阶段全部识别到得分最高
+        2. 各阶段步数合理性：步数在合理范围内加分，异常步数扣分
+        3. R/U/F动作偏好：CFOP还原中R/U/F面动作应占主导
+        """
+        result = analyzer.analyze()
+        score = 0.0
+
+        # 阶段完整性评分
+        phase_count = 0
+        for phase in PHASE_ORDER:
+            moves = result.get(phase, [])
+            if moves:
+                phase_count += 1
+
+        # 7个阶段全部识别到，大幅加分
+        if phase_count == 7:
+            score += 1000.0
+        elif phase_count >= 6:
+            score += 600.0
+        elif phase_count >= 5:
+            score += 300.0
+        elif phase_count >= 4:
+            score += 100.0
+        elif phase_count >= 3:
+            score += 0.0
+        else:
+            # 阶段太少，严重扣分
+            score -= 2000.0
+
+        # 各阶段步数合理性评分
+        phase_step_ranges = {
+            "cross": (1, 12),
+            "f2l1": (2, 14), "f2l2": (2, 14),
+            "f2l3": (2, 14), "f2l4": (2, 14),
+            "oll": (4, 16),
+            "pll": (4, 20),
+        }
+
+        for phase in PHASE_ORDER:
+            moves = result.get(phase, [])
+            if not moves:
+                continue
+
+            step_count = len(moves)
+            min_steps, max_steps = phase_step_ranges.get(phase, (1, 30))
+
+            if min_steps <= step_count <= max_steps:
+                score += 50.0
+            elif step_count > max_steps:
+                # 步数过多，逐步扣分
+                excess = step_count - max_steps
+                score -= excess * 20.0
+            else:
+                # 步数过少
+                score -= 30.0
+
+        # R/U/F动作偏好评分（CFOP还原中R/U/F面动作应占主导）
+        total_moves = 0
+        ruf_count = 0
+        for phase in PHASE_ORDER:
+            moves = result.get(phase, [])
+            for m in moves:
+                total_moves += 1
+                if m[0] in ('R', 'U', 'F'):
+                    ruf_count += 1
+
+        if total_moves > 0:
+            ruf_ratio = ruf_count / total_moves
+            # R/U/F占比越高越合理
+            if ruf_ratio >= 0.6:
+                score += 100.0
+            elif ruf_ratio >= 0.5:
+                score += 50.0
+            elif ruf_ratio >= 0.4:
+                score += 0.0
+            else:
+                score -= 100.0
+
+        return score
 
     @classmethod
     def from_bottom_color(cls, scramble: str, solution: str, bottom_color: str):
@@ -487,7 +642,11 @@ class CFOPAnalyzer:
         
         orientation_desc = get_orientation_desc(self.top_color, self.front_color)
         
-        system = SYSTEM_PROMPT.format(pause_threshold=AI_PAUSE_THRESHOLD_SEC)
+        system = SYSTEM_PROMPT.format(
+            pause_threshold=AI_PAUSE_THRESHOLD_SEC,
+            strength_tags_str="、".join(STRENGTH_TAGS),
+            weakness_tags_str="、".join(WEAKNESS_TAGS)
+        )
         user = USER_SINGLE_TEMPLATE.format(
             max_words=AI_MAX_RESPONSE_WORDS,
             orientation_desc=orientation_desc,

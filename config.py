@@ -3,6 +3,7 @@
 """
 
 import os
+import json
 import sys
 
 
@@ -88,6 +89,24 @@ FACE_MOVES = {
     'L': ['L', "L'", 'L2'],
     'R': ['R', "R'", 'R2'],
 }
+
+# 优缺点标签库
+STRENGTH_TAGS = [
+    "Cross高效", "F2L流畅", "F2L观察快", "OLL识别快",
+    "PLL执行快", "TPS高", "步数精简", "卡顿少",
+    "观察时间短", "废步少", "节奏稳定", "手法流畅",
+]
+
+WEAKNESS_TAGS = [
+    "Cross低效", "F2L卡顿", "F2L观察慢", "OLL识别慢",
+    "PLL执行慢", "TPS低", "步数冗余", "卡顿多",
+    "观察时间长", "废步多", "节奏不稳", "手法生疏",
+]
+
+TAG_LIBRARIES_JSON = json.dumps({
+    "strength": STRENGTH_TAGS,
+    "weakness": WEAKNESS_TAGS,
+}, ensure_ascii=False)
 
 ALL_MOVES = []
 for moves in FACE_MOVES.values():
@@ -272,6 +291,19 @@ SYSTEM_PROMPT = """你是一个专业的魔方CFOP还原分析专家教练。请
 
 ### 综合训练建议
 针对性的整体训练计划和建议
+
+## 优缺点标签（必须输出）
+分析完成后，必须根据还原数据给出优点和缺点标签，各1-3个，必须从以下标签库中选择：
+
+优点标签库：{strength_tags_str}
+缺点标签库：{weakness_tags_str}
+
+单组分析时，在分析结果最后输出一行JSON：
+<tags>{{"strength": ["标签1", "标签2"], "weakness": ["标签1", "标签2"]}}</tags>
+
+多组分析时，对每组还原分别输出标签，在每组的分析结果最后输出一行JSON：
+<tags group="1">{{"strength": ["标签1"], "weakness": ["标签1", "标签2"]}}</tags>
+（group值为组号，从1开始）
 """
 
 
