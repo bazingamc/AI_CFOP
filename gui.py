@@ -38,7 +38,7 @@ class CFOPAnalyzerGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("AI_CFOP V1.0")
+        self.root.title("AI_CFOP V1.1")
         self.root.geometry("960x980")
         self.root.resizable(True, True)
         self.root.configure(bg=THEME["bg"])
@@ -63,6 +63,8 @@ class CFOPAnalyzerGUI:
 
         self._current_user_id = None
         self._current_username = ""
+        # 提前初始化数据库，确保_create_widgets中访问数据库时表已存在
+        memory_db.init_db()
         self._setup_styles()
         self._create_widgets()
         self._load_saved_config()
