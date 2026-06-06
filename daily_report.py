@@ -10,6 +10,10 @@ from typing import Dict, List, Optional, Tuple
 
 import memory_db
 from config import PHASE_ORDER, PHASE_LABELS, SILICONFLOW_BASE_URL
+from prompts import (
+    SYSTEM_PROMPT, USER_MULTI_TEMPLATE, USER_SUMMARY_TEMPLATE,
+    AI_PAUSE_THRESHOLD_SEC, STRENGTH_TAGS, WEAKNESS_TAGS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -191,13 +195,8 @@ def build_stats_text(stats: Dict) -> str:
 
 
 def build_ai_prompt(stats: Dict) -> Tuple[str, str]:
-    system_prompt = (
-        "你是一个专业的魔方CFOP还原分析教练。请根据用户今日练习数据与历史对比，"
-        "给出200字以内的简洁总结报告，包括：整体表现评价、与历史对比、薄弱环节、改进建议。"
-        "语言简洁有力，直接给出结论。"
-    )
-
-    parts = [f"今日练习数据 ({stats['date']}):"]
+    # 构建今日数据文本
+    parts = [f"日期: {stats['date']}"]
     parts.append(f"还原次数: {stats['count']}")
     std_str = f" (σ{stats['std_time']:.2f}s)" if stats.get('std_time') else ""
     parts.append(f"平均时间: {stats['avg_time']:.2f}s{std_str}")
@@ -231,18 +230,26 @@ def build_ai_prompt(stats: Dict) -> Tuple[str, str]:
         parts.append(f"最佳Ao12: {ao12['best']['ao12']:.2f}s")
         parts.append(f"最差Ao12: {ao12['worst']['ao12']:.2f}s")
 
+    today_data = "\n".join(parts)
+
+    # 构建历史对比文本
+    history_parts = []
     history_text = _build_history_text()
     if history_text:
-        parts.append("")
-        parts.append(history_text)
+        history_parts.append(history_text)
 
     comparison_text = _build_comparison_text(stats)
     if comparison_text:
-        parts.append("")
-        parts.append(comparison_text)
+        history_parts.append(comparison_text)
 
-    user_prompt = "\n".join(parts)
-    return system_prompt, user_prompt
+    history_data = "\n\n".join(history_parts) if history_parts else "（无历史数据）"
+
+    system = SYSTEM_PROMPT.format(pause_threshold=AI_PAUSE_THRESHOLD_SEC)
+    user = USER_SUMMARY_TEMPLATE.format(
+        today_data=today_data,
+        history_data=history_data,
+    )
+    return system, user
 
 
 def _build_history_text() -> str:
@@ -366,6 +373,9 @@ def call_ai_summary(api_key: str, model: str, stats: Dict) -> str:
 
     system_prompt, user_prompt = build_ai_prompt(stats)
 
+    log.info(f"今日总结System提示词:\n{system_prompt}")
+    log.info(f"今日总结User提示词:\n{user_prompt}")
+
     client = OpenAI(api_key=api_key, base_url=SILICONFLOW_BASE_URL)
     resp = client.chat.completions.create(
         model=model,
@@ -382,6 +392,9 @@ def call_ai_summary_stream(api_key: str, model: str, stats: Dict):
     from openai import OpenAI
 
     system_prompt, user_prompt = build_ai_prompt(stats)
+
+    log.info(f"今日总结System提示词:\n{system_prompt}")
+    log.info(f"今日总结User提示词:\n{user_prompt}")
 
     client = OpenAI(api_key=api_key, base_url=SILICONFLOW_BASE_URL)
     stream = client.chat.completions.create(
@@ -403,29 +416,62 @@ def call_ai_summary_stream(api_key: str, model: str, stats: Dict):
             yield ("content", delta.content)
 
 
-def call_ao12_analysis(api_key: str, model: str, analyzers: list, which: str) -> str:
-    from openai import OpenAI
-    from config import SYSTEM_PROMPT, AI_PAUSE_THRESHOLD_SEC
+def _build_ao12_prompts(analyzers: list, which: str) -> Tuple[str, str]:
+    """构建Ao12分析的提示词，复用USER_MULTI_TEMPLATE"""
+    from config import PHASE_ORDER
+    from move_utils import get_orientation_desc
 
     count = len(analyzers)
     times = [a.get_total_time() for a in analyzers]
     avg_time = sum(times) / len(times)
+    sorted_times = sorted(times)
+    ao_avg = sum(sorted_times[1:-1]) / (len(times) - 2) if len(times) >= 5 else avg_time
+    variance = sum((t - avg_time) ** 2 for t in times) / len(times)
+    std_dev = variance ** 0.5
+    best_idx = times.index(min(times)) + 1
+    worst_idx = times.index(max(times)) + 1
 
     groups_detail = ""
     for i, analyzer in enumerate(analyzers):
+        orientation_desc = get_orientation_desc(analyzer.top_color, analyzer.front_color)
+        total_steps = sum(analyzer.get_phase_stats()[p]["steps"] for p in PHASE_ORDER)
+        total_time = analyzer.get_total_time()
+        total_tps = total_steps / total_time if total_time > 0 else 0
         groups_detail += f"\n### 第 {i+1} 组 (总时间: {times[i]:.2f}s)\n"
-        groups_detail += analyzer.format_output(include_orientation=True)
+        groups_detail += f"**朝向**: {orientation_desc}\n\n"
+        groups_detail += analyzer.build_phase_details_text()
+        groups_detail += f"### 总计\n- 总步数: {total_steps}\n- 总用时: {total_time:.2f}s\n- 总TPS: {total_tps:.1f}\n"
         groups_detail += "\n"
 
     label = "最佳" if which == "best" else "最差"
+
     system = SYSTEM_PROMPT.format(pause_threshold=AI_PAUSE_THRESHOLD_SEC)
-    user = (
-        f"这是今日{label}Ao12（连续12次还原）的数据，共{count}组有效解析。\n\n"
-        f"各组时间: {', '.join([f'{t:.2f}s' for t in times])}\n"
-        f"平均时间: {avg_time:.2f}s\n\n"
-        f"各组解法复盘:\n{groups_detail}\n"
-        f"请分析这12次还原的整体表现，找出共性问题、薄弱环节，给出改进建议。200字以内。"
+    user = USER_MULTI_TEMPLATE.format(
+        count=count,
+        groups_times=', '.join([f'{t:.2f}s' for t in times]),
+        avg_time=avg_time,
+        ao_avg=ao_avg,
+        std_dev=std_dev,
+        best_idx=best_idx,
+        min_time=min(times),
+        worst_idx=worst_idx,
+        max_time=max(times),
+        groups_detail=groups_detail,
+        memory_info=f"\n这是今日{label}Ao12（连续12次还原）的数据。请分析整体表现，找出共性问题、薄弱环节，给出改进建议。200字以内。",
+        strength_tags_str="、".join(STRENGTH_TAGS),
+        weakness_tags_str="、".join(WEAKNESS_TAGS),
     )
+    return system, user
+
+
+def call_ao12_analysis(api_key: str, model: str, analyzers: list, which: str) -> str:
+    from openai import OpenAI
+
+    system, user = _build_ao12_prompts(analyzers, which)
+
+    label = "最佳" if which == "best" else "最差"
+    log.info(f"Ao12分析({label})System提示词:\n{system}")
+    log.info(f"Ao12分析({label})User提示词:\n{user}")
 
     client = OpenAI(api_key=api_key, base_url=SILICONFLOW_BASE_URL)
     resp = client.chat.completions.create(
@@ -441,27 +487,12 @@ def call_ao12_analysis(api_key: str, model: str, analyzers: list, which: str) ->
 
 def call_ao12_analysis_stream(api_key: str, model: str, analyzers: list, which: str):
     from openai import OpenAI
-    from config import SYSTEM_PROMPT, AI_PAUSE_THRESHOLD_SEC
 
-    count = len(analyzers)
-    times = [a.get_total_time() for a in analyzers]
-    avg_time = sum(times) / len(times)
-
-    groups_detail = ""
-    for i, analyzer in enumerate(analyzers):
-        groups_detail += f"\n### 第 {i+1} 组 (总时间: {times[i]:.2f}s)\n"
-        groups_detail += analyzer.format_output(include_orientation=True)
-        groups_detail += "\n"
+    system, user = _build_ao12_prompts(analyzers, which)
 
     label = "最佳" if which == "best" else "最差"
-    system = SYSTEM_PROMPT.format(pause_threshold=AI_PAUSE_THRESHOLD_SEC)
-    user = (
-        f"这是今日{label}Ao12（连续12次还原）的数据，共{count}组有效解析。\n\n"
-        f"各组时间: {', '.join([f'{t:.2f}s' for t in times])}\n"
-        f"平均时间: {avg_time:.2f}s\n\n"
-        f"各组解法复盘:\n{groups_detail}\n"
-        f"请分析这12次还原的整体表现，找出共性问题、薄弱环节，给出改进建议。200字以内。"
-    )
+    log.info(f"Ao12分析({label})System提示词:\n{system}")
+    log.info(f"Ao12分析({label})User提示词:\n{user}")
 
     client = OpenAI(api_key=api_key, base_url=SILICONFLOW_BASE_URL)
     stream = client.chat.completions.create(

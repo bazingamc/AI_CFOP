@@ -5,10 +5,13 @@ CFOP分析器 - 核心分析逻辑
 from typing import List, Dict
 
 from config import (
-    AI_MAX_RESPONSE_WORDS, AI_PAUSE_THRESHOLD_SEC,
     PHASE_ORDER, PHASE_NAMES,
+    OPPOSITE_COLORS, COLOR_NAMES,
+)
+from prompts import (
+    AI_MAX_RESPONSE_WORDS, AI_PAUSE_THRESHOLD_SEC,
     SYSTEM_PROMPT, USER_SINGLE_TEMPLATE, PHASE_DETAIL_TEMPLATE,
-    OPPOSITE_COLORS, COLOR_NAMES, STRENGTH_TAGS, WEAKNESS_TAGS
+    STRENGTH_TAGS, WEAKNESS_TAGS,
 )
 from cube import Cube
 from move_utils import parse_moves, parse_timed_moves, validate_orientation
@@ -980,21 +983,15 @@ class CFOPAnalyzer:
             parts.append(f"{move}@{ts_s:.2f}")
         return " ".join(parts)
     
-    def build_ai_prompt(self, memory_text: str = "") -> tuple:
+    def build_phase_details_text(self) -> str:
+        """构建阶段详情文本（单组/多组分析共用）"""
         stats = self.get_phase_stats()
         oriented_timed = self.get_phase_oriented_timed_moves()
 
-        total_steps = 0
-        total_execution_time = 0.0
-        total_observation_time = 0.0
         phase_details = ""
 
         for phase in PHASE_ORDER:
             s = stats[phase]
-            total_steps += s["steps"]
-            total_execution_time += s["time"]
-            if "observation_time" in s:
-                total_observation_time += s["observation_time"]
 
             oriented_moves = s["moves"]
             merged = "".join(self._merge_moves(oriented_moves))
@@ -1035,6 +1032,24 @@ class CFOPAnalyzer:
                 rotation_info=rotation_info
             )
 
+        return phase_details
+
+    def build_ai_prompt(self, memory_text: str = "") -> tuple:
+        stats = self.get_phase_stats()
+
+        total_steps = 0
+        total_execution_time = 0.0
+        total_observation_time = 0.0
+
+        for phase in PHASE_ORDER:
+            s = stats[phase]
+            total_steps += s["steps"]
+            total_execution_time += s["time"]
+            if "observation_time" in s:
+                total_observation_time += s["observation_time"]
+
+        phase_details = self.build_phase_details_text()
+
         total_time = self.get_total_time()
         total_tps = total_steps / total_time if total_time > 0 else 0
 
@@ -1042,8 +1057,6 @@ class CFOPAnalyzer:
 
         system = SYSTEM_PROMPT.format(
             pause_threshold=AI_PAUSE_THRESHOLD_SEC,
-            strength_tags_str="、".join(STRENGTH_TAGS),
-            weakness_tags_str="、".join(WEAKNESS_TAGS)
         )
         user = USER_SINGLE_TEMPLATE.format(
             max_words=AI_MAX_RESPONSE_WORDS,
@@ -1052,41 +1065,13 @@ class CFOPAnalyzer:
             total_steps=total_steps,
             total_time=total_time,
             total_tps=total_tps,
-            memory_info=memory_text
+            memory_info=memory_text,
+            strength_tags_str="、".join(STRENGTH_TAGS),
+            weakness_tags_str="、".join(WEAKNESS_TAGS),
         )
 
         return (system, user)
-    
-    def build_simple_prompt(self, template: str) -> str:
-        stats = self.get_phase_stats()
-        
-        total_steps = 0
-        total_execution_time = 0.0
-        phase_details = ""
-        
-        for phase in PHASE_ORDER:
-            s = stats[phase]
-            total_steps += s["steps"]
-            total_execution_time += s["time"]
-            
-            tps_str = f"{s['tps']:.1f}" if s['tps'] > 0 else "N/A"
-            phase_details += f"- {PHASE_NAMES[phase]}: {s['steps']}步, {s['time']:.2f}s, TPS={tps_str}\n"
-        
-        total_time = self.get_total_time()
-        total_tps = total_steps / total_time if total_time > 0 else 0
-        
-        orientation_desc = get_orientation_desc(self.top_color, self.front_color)
-        
-        user = template.format(
-            orientation_desc=orientation_desc,
-            phase_details=phase_details.strip(),
-            total_steps=total_steps,
-            total_time=total_time,
-            total_tps=total_tps
-        )
-        
-        return user
-    
+
     def get_total_time(self) -> float:
         all_times = []
         for phase in self.phase_timestamps.values():

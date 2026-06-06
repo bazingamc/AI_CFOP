@@ -2499,7 +2499,7 @@ class CFOPAnalyzerGUI:
             # 不调用 _on_mode_change()，因为它会加载之前保存的数据
             # 直接创建多组输入UI，不加载旧数据
             self._save_single_data()
-            self._create_multi_input_ui()
+            self._create_multi_input_ui(skip_default_rows=True)
         else:
             if hasattr(self, 'multi_inputs') and self.multi_inputs:
                 for inp in self.multi_inputs:
@@ -2734,7 +2734,7 @@ class CFOPAnalyzerGUI:
 
         self.mode_desc_label.config(text="单组模式：分析单次还原过程（底色自动识别）")
     
-    def _create_multi_input_ui(self):
+    def _create_multi_input_ui(self, skip_default_rows=False):
         for widget in self.input_container.winfo_children():
             widget.destroy()
         
@@ -2798,8 +2798,9 @@ class CFOPAnalyzerGUI:
                                            fg=THEME["fg"], font=("Microsoft YaHei", 9))
         self.multi_count_label.pack(side=tk.LEFT, padx=(16, 0))
         
-        for _ in range(5):
-            self._add_multi_row()
+        if not skip_default_rows:
+            for _ in range(5):
+                self._add_multi_row()
 
         self.mode_desc_label.config(text="多组模式：分析多组还原，计算平均、波动度等（底色自动识别）")
 
@@ -3879,45 +3880,37 @@ class CFOPAnalyzerGUI:
 
     def _build_memory_text(self) -> str:
         from config import PHASE_ORDER
-        period_avgs = memory_db.get_all_averages_by_period()
-        if not period_avgs:
+        # 使用与水平统计相同的计算方法：近1000次截尾均值
+        avg = memory_db.get_averages(limit=1000)
+        if not avg:
             return ""
         
-        period_order = ["近7天", "近30天", "近1年", "全部"]
-        available_periods = [p for p in period_order if p in period_avgs]
-        if not available_periods:
-            return ""
-        
-        lines = ["【历史平均水平】"]
+        lines = ["【历史平均水平（近1000次）】"]
         
         display_phases = ["cross", "f2l_avg", "oll", "pll"]
         display_labels = {"cross": "Cross", "f2l_avg": "F2L均", "oll": "OLL", "pll": "PLL"}
         
         for phase_key in display_phases:
             label = display_labels[phase_key]
-            parts = [f"{label}:"]
-            for period in available_periods:
-                avg_data = period_avgs.get(period, {})
-                if phase_key == "f2l_avg":
-                    f2l_phases = ["f2l1", "f2l2", "f2l3", "f2l4"]
-                    f2l_data = [avg_data.get(p, {}) for p in f2l_phases]
-                    f2l_data = [d for d in f2l_data if d]
-                    if f2l_data:
-                        avg_steps = sum(d["steps"] for d in f2l_data) / len(f2l_data)
-                        avg_time = sum(d["time"] for d in f2l_data) / len(f2l_data)
-                        avg_tps = sum(d["tps"] for d in f2l_data) / len(f2l_data)
-                        avg_obs = sum(d["observation_time"] for d in f2l_data) / len(f2l_data)
-                        parts.append(f" {period}={avg_steps:.0f}步{avg_time:.1f}s(TPS{avg_tps:.1f} 观察{avg_obs:.1f}s)")
-                    else:
-                        parts.append(f" {period}=-")
+            if phase_key == "f2l_avg":
+                f2l_phases = ["f2l1", "f2l2", "f2l3", "f2l4"]
+                f2l_data = [avg.get(p, {}) for p in f2l_phases]
+                f2l_data = [d for d in f2l_data if d]
+                if f2l_data:
+                    avg_steps = sum(d["steps"] for d in f2l_data) / len(f2l_data)
+                    avg_time = sum(d["time"] for d in f2l_data) / len(f2l_data)
+                    avg_tps = sum(d["tps"] for d in f2l_data) / len(f2l_data)
+                    avg_obs = sum(d["observation_time"] for d in f2l_data) / len(f2l_data)
+                    lines.append(f"{label}: {avg_steps:.0f}步{avg_time:.1f}s(TPS{avg_tps:.1f} 观察{avg_obs:.1f}s)")
                 else:
-                    d = avg_data.get(phase_key, {})
-                    if d:
-                        obs_str = f" 观察{d['observation_time']:.1f}s" if phase_key != "cross" else ""
-                        parts.append(f" {period}={d['steps']:.0f}步{d['time']:.1f}s(TPS{d['tps']:.1f}{obs_str})")
-                    else:
-                        parts.append(f" {period}=-")
-            lines.append(" |".join(parts))
+                    lines.append(f"{label}: -")
+            else:
+                d = avg.get(phase_key, {})
+                if d:
+                    obs_str = f" 观察{d['observation_time']:.1f}s" if phase_key != "cross" else ""
+                    lines.append(f"{label}: {d['steps']:.0f}步{d['time']:.1f}s(TPS{d['tps']:.1f}{obs_str})")
+                else:
+                    lines.append(f"{label}: -")
         
         total_avg = memory_db.get_total_time_avg()
         if total_avg:
@@ -3926,25 +3919,17 @@ class CFOPAnalyzerGUI:
         return "\n".join(lines) + "\n"
 
     def _build_comparison_text(self, analyzer) -> str:
-        period_avgs = memory_db.get_all_averages_by_period()
-        if not period_avgs:
+        # 使用与水平统计相同的计算方法：近1000次截尾均值
+        avg = memory_db.get_averages(limit=1000)
+        if not avg:
             return ""
         
-        baseline_period = None
-        for p in ["全部", "近1年", "近30天", "近7天"]:
-            if p in period_avgs:
-                baseline_period = p
-                break
-        if not baseline_period:
-            return ""
-        
-        baseline = period_avgs[baseline_period]
         stats = analyzer.get_phase_stats()
         
-        lines = [f"【本次与历史对比】（基准：{baseline_period}平均）"]
+        lines = ["【本次与历史对比】（基准：近1000次平均）"]
         
         cur = stats["cross"]
-        hist = baseline.get("cross", {})
+        hist = avg.get("cross", {})
         if hist:
             ds = cur["steps"] - hist["steps"]
             dt = cur["time"] - hist["time"]
@@ -3954,7 +3939,7 @@ class CFOPAnalyzerGUI:
         
         f2l_phases = ["f2l1", "f2l2", "f2l3", "f2l4"]
         cur_f2l = [stats[p] for p in f2l_phases if stats[p]["steps"] > 0]
-        hist_f2l = [baseline.get(p, {}) for p in f2l_phases]
+        hist_f2l = [avg.get(p, {}) for p in f2l_phases]
         hist_f2l_valid = [d for d in hist_f2l if d]
         if cur_f2l and hist_f2l_valid:
             cs = sum(s["steps"] for s in cur_f2l) / len(cur_f2l)
@@ -3974,15 +3959,15 @@ class CFOPAnalyzerGUI:
         
         for phase_key, phase_label in [("oll", "OLL"), ("pll", "PLL")]:
             cur = stats[phase_key]
-            hist = baseline.get(phase_key, {})
+            hist = avg.get(phase_key, {})
             if hist:
                 ds = cur["steps"] - hist["steps"]
                 dt = cur["time"] - hist["time"]
                 dtps = cur["tps"] - hist["tps"]
                 tag = "进步" if dt < 0 else ("退步" if dt > 0 else "持平")
+                obs_info = ""
                 obs_cur = cur.get("observation_time")
                 obs_hist = hist.get("observation_time")
-                obs_info = ""
                 if obs_cur is not None and obs_hist is not None:
                     dobs = obs_cur - obs_hist
                     obs_info = f" 观察{dobs:+.1f}s"
@@ -3998,19 +3983,10 @@ class CFOPAnalyzerGUI:
         return "\n".join(lines) + "\n"
 
     def _build_multi_comparison_text(self, analyzers) -> str:
-        period_avgs = memory_db.get_all_averages_by_period()
-        if not period_avgs:
+        # 使用与水平统计相同的计算方法：近1000次截尾均值
+        avg = memory_db.get_averages(limit=1000)
+        if not avg:
             return ""
-        
-        baseline_period = None
-        for p in ["全部", "近1年", "近30天", "近7天"]:
-            if p in period_avgs:
-                baseline_period = p
-                break
-        if not baseline_period:
-            return ""
-        
-        baseline = period_avgs[baseline_period]
         
         phases = ["cross", "f2l1", "f2l2", "f2l3", "f2l4", "oll", "pll"]
         avg_stats = {}
@@ -4024,10 +4000,10 @@ class CFOPAnalyzerGUI:
                     "observation_time": sum(s.get("observation_time", 0) for s in valid) / len(valid) if phase != "cross" else None,
                 }
         
-        lines = [f"【多组平均与历史对比】（基准：{baseline_period}平均）"]
+        lines = ["【多组平均与历史对比】（基准：近1000次平均）"]
         
         cur = avg_stats.get("cross", {})
-        hist = baseline.get("cross", {})
+        hist = avg.get("cross", {})
         if cur and hist:
             ds = cur["steps"] - hist["steps"]
             dt = cur["time"] - hist["time"]
@@ -4038,7 +4014,7 @@ class CFOPAnalyzerGUI:
         f2l_phases = ["f2l1", "f2l2", "f2l3", "f2l4"]
         cur_f2l = [avg_stats.get(p, {}) for p in f2l_phases]
         cur_f2l_valid = [d for d in cur_f2l if d]
-        hist_f2l = [baseline.get(p, {}) for p in f2l_phases]
+        hist_f2l = [avg.get(p, {}) for p in f2l_phases]
         hist_f2l_valid = [d for d in hist_f2l if d]
         if cur_f2l_valid and hist_f2l_valid:
             cs = sum(d["steps"] for d in cur_f2l_valid) / len(cur_f2l_valid)
@@ -4058,7 +4034,7 @@ class CFOPAnalyzerGUI:
         
         for phase_key, phase_label in [("oll", "OLL"), ("pll", "PLL")]:
             cur = avg_stats.get(phase_key, {})
-            hist = baseline.get(phase_key, {})
+            hist = avg.get(phase_key, {})
             if cur and hist:
                 ds = cur["steps"] - hist["steps"]
                 dt = cur["time"] - hist["time"]
@@ -4803,7 +4779,9 @@ class CFOPAnalyzerGUI:
         threading.Thread(target=do_stream, daemon=True).start()
     
     def _build_multi_analysis_prompts(self, analyzers, memory_text=""):
-        from config import SYSTEM_PROMPT, USER_MULTI_TEMPLATE, AI_PAUSE_THRESHOLD_SEC, STRENGTH_TAGS, WEAKNESS_TAGS
+        from prompts import SYSTEM_PROMPT, USER_MULTI_TEMPLATE, AI_PAUSE_THRESHOLD_SEC, STRENGTH_TAGS, WEAKNESS_TAGS
+        from config import PHASE_ORDER
+        from move_utils import get_orientation_desc
         
         count = len(analyzers)
         
@@ -4818,14 +4796,18 @@ class CFOPAnalyzerGUI:
         
         groups_detail = ""
         for i, analyzer in enumerate(analyzers):
+            orientation_desc = get_orientation_desc(analyzer.top_color, analyzer.front_color)
+            total_steps = sum(analyzer.get_phase_stats()[p]["steps"] for p in PHASE_ORDER)
+            total_time = analyzer.get_total_time()
+            total_tps = total_steps / total_time if total_time > 0 else 0
             groups_detail += f"\n### 第 {i+1} 组 (总时间: {times[i]:.2f}s)\n"
-            groups_detail += analyzer.format_output(include_orientation=True)
+            groups_detail += f"**朝向**: {orientation_desc}\n\n"
+            groups_detail += analyzer.build_phase_details_text()
+            groups_detail += f"### 总计\n- 总步数: {total_steps}\n- 总用时: {total_time:.2f}s\n- 总TPS: {total_tps:.1f}\n"
             groups_detail += "\n"
         
         system = SYSTEM_PROMPT.format(
             pause_threshold=AI_PAUSE_THRESHOLD_SEC,
-            strength_tags_str="、".join(STRENGTH_TAGS),
-            weakness_tags_str="、".join(WEAKNESS_TAGS)
         )
         user = USER_MULTI_TEMPLATE.format(
             count=count,
@@ -4838,7 +4820,9 @@ class CFOPAnalyzerGUI:
             worst_idx=worst_idx,
             max_time=max(times),
             groups_detail=groups_detail,
-            memory_info=memory_text
+            memory_info=memory_text,
+            strength_tags_str="、".join(STRENGTH_TAGS),
+            weakness_tags_str="、".join(WEAKNESS_TAGS),
         )
         
         return (system, user)

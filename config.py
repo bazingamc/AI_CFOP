@@ -1,5 +1,7 @@
 """
-配置参数、提示词模板、主题样式
+配置参数、主题样式
+
+提示词模板已迁移至 prompts.py
 """
 
 import os
@@ -20,10 +22,15 @@ CONFIG_FILE = os.path.join(APP_DIR, ".cfop_config.json")
 LOG_DIR = os.path.join(APP_DIR, "logs")
 RESULT_DIR = os.path.join(APP_DIR, "results")
 
-AI_MAX_RESPONSE_WORDS = 1000
-AI_PAUSE_THRESHOLD_SEC = 0.5
-
 SILICONFLOW_BASE_URL = "https://api.siliconflow.cn/v1"
+
+# 从 prompts.py 导入提示词相关常量（保持向后兼容）
+from prompts import (
+    AI_MAX_RESPONSE_WORDS, AI_PAUSE_THRESHOLD_SEC,
+    STRENGTH_TAGS, WEAKNESS_TAGS,
+    SYSTEM_PROMPT, USER_SINGLE_TEMPLATE, USER_MULTI_TEMPLATE,
+    USER_SUMMARY_TEMPLATE, PHASE_DETAIL_TEMPLATE,
+)
 
 ORIENTATION_OPTIONS = [
     ('黄顶绿前', 'Y', 'G'),
@@ -90,24 +97,6 @@ FACE_MOVES = {
     'R': ['R', "R'", 'R2'],
 }
 
-# 优缺点标签库
-STRENGTH_TAGS = [
-    "Cross高效", "F2L流畅", "F2L观察快", "OLL识别快",
-    "PLL执行快", "TPS高", "步数精简", "卡顿少",
-    "观察时间短", "废步少", "节奏稳定", "手法流畅",
-]
-
-WEAKNESS_TAGS = [
-    "Cross低效", "F2L卡顿", "F2L观察慢", "OLL识别慢",
-    "PLL执行慢", "TPS低", "步数冗余", "卡顿多",
-    "观察时间长", "废步多", "节奏不稳", "手法生疏",
-]
-
-TAG_LIBRARIES_JSON = json.dumps({
-    "strength": STRENGTH_TAGS,
-    "weakness": WEAKNESS_TAGS,
-}, ensure_ascii=False)
-
 ALL_MOVES = []
 for moves in FACE_MOVES.values():
     ALL_MOVES.extend(moves)
@@ -171,177 +160,6 @@ PLL_PATTERNS = {
 }
 
 
-SYSTEM_PROMPT = """你是一个专业的魔方CFOP还原分析专家教练。请基于给定数据进行客观、深入的分析。
-
-## 核心原则
-- 不允许猜测未提供的信息
-- 不允许使用"可能/大概"等模糊词
-- 每个结论必须有数据支撑
-- 使用简体中文，以markdown格式输出
-
-## 评估标准（必须严格使用）
-- 初学者：总用时 >30s 
-- 入门：20–30s 
-- 熟练：15–20s 
-- 高手：10–15s 
-- 专业：<10s 
-
-## 时间戳说明（强制规则）
-每个步骤后的@表示执行时间点（单位：秒）。
-观察时间 = 当前阶段第一步 - 上一阶段最后一步的时间间隔，反映预判能力。
-每一阶段第二步开始，与前一步间隔 >{pause_threshold}秒 = 明确卡顿，必须指出具体位置（步骤区间）。
-
-## 分析重点（必须覆盖）
-1. 各阶段（Cross / F2L / OLL / PLL）技术水平
-2. TPS水平及稳定性
-3. 是否存在低效解法或废步
-4. 是否存在异常阶段（某阶段TPS低于整体TPS 30%以上）
-5. 卡顿点分析（至少1个，如存在，如不存在直接说"无"）
-6. 观察时间分析（F2L各组、OLL、PLL的观察时间是否合理）
-7. 与历史对比（如提供了历史对比数据，必须逐阶段对比，明确指出进步/退步及幅度）
-
-## 关键参考指标（必须结合分析）
-- Cross步数是否≤8步
-- F2L单对效率（步数 + TPS + 观察时间）
-- OLL / PLL耗时占比及观察时间
-- 各阶段TPS与总TPS差异
-- 观察时间参考：优秀<0.3s，良好0.3-0.5s，一般0.5-1.0s，需提升>1.0s
-
-## 单组分析输出格式（必须严格遵守）
-
-【总体分析】
-（一句话给出整体水平）
-本次还原用时xx，总步数xx，TPSxx，属于xx水平
-
-【分阶段分析】
-1.Cross：
-优点：
-问题：
-与历史对比：（如无历史数据则省略；有则必须填写，格式：步数x步↑/↓，用时x.xs↑/↓，TPS x.x↑/↓，简述进步或退步）
-卡顿分析：
-2.F2L1：
-优点：
-问题：
-观察时间：
-与历史对比：（同上格式）
-卡顿分析：
-3.F2L2：
-优点：
-问题：
-观察时间：
-与历史对比：
-卡顿分析：
-4.F2L3：
-优点：
-问题：
-观察时间：
-与历史对比：
-卡顿分析：
-5.F2L4：
-优点：
-问题：
-观察时间：
-与历史对比：
-卡顿分析：
-6.OLL：
-优点：
-问题：
-观察时间：
-与历史对比：
-卡顿分析：
-7.PLL：
-优点：
-问题：
-观察时间：
-与历史对比：
-卡顿分析：
-
-（每个阶段必须包含：优点 + 问题 + 观察时间分析（Cross除外） + 与历史对比（有数据时） + 卡顿分析，禁止空泛，如果没有可直接省略该部分）
-
-【与历史综合对比】（如无历史数据则整段省略）
-综合各阶段对比结果，总结本次还原相比历史水平的整体表现：
-- 进步方面：（列出进步的阶段及幅度）
-- 退步方面：（列出退步的阶段及幅度）
-- 整体趋势：（进步/退步/持平）
-
-【训练建议】
-必须具体可执行，结合与历史对比发现的退步环节重点建议，例如：
-- F2L观察训练（减少停顿）
-- OLL/PLL熟练度提升
-- TPS专项训练
-禁止泛泛表述（如"多练习"）
-
-【提升路线】
-给出清晰优先级路径（如：先F2L→再OLL→最后TPS）
-
-## 多组分析额外要求
-每一组的各阶段，都将优点、问题、观察时间、与历史对比、卡顿分析整合为一句话，不超过50字的总结。
-除对每组进行上述格式的分阶段分析外，还需包含：
-
-### 整体表现评估
-1. 整体水平评价（根据去头尾平均和波动度）
-2. 稳定性分析（波动度解读）
-3. 最佳组和最差组的原因分析
-
-### 与历史综合对比（如提供了历史对比数据必须包含）
-将多组平均数据与历史平均水平逐阶段对比，分析整体趋势
-
-### 共性问题总结
-找出多组还原中普遍存在的问题
-
-### 综合训练建议
-针对性的整体训练计划和建议
-
-## 优缺点标签（必须输出）
-分析完成后，必须根据还原数据给出优点和缺点标签，各1-3个，必须从以下标签库中选择：
-
-优点标签库：{strength_tags_str}
-缺点标签库：{weakness_tags_str}
-
-单组分析时，在分析结果最后输出一行JSON：
-<tags>{{"strength": ["标签1", "标签2"], "weakness": ["标签1", "标签2"]}}</tags>
-
-多组分析时，对每组还原分别输出标签，在每组的分析结果最后输出一行JSON：
-<tags group="1">{{"strength": ["标签1"], "weakness": ["标签1", "标签2"]}}</tags>
-（group值为组号，从1开始）
-"""
-
-
-
-USER_SINGLE_TEMPLATE = """请分析以下单组CFOP还原数据（回复不超过{max_words}字）：
-
-**重要说明**：以下还原步骤的魔方朝向为{orientation_desc}，这是数据采集时的朝向，不代表还原者实际持握方式。禁止对此做任何推测。
-
-## CFOP还原数据
-
-{phase_details}
-### 总计
-- 总步数: {total_steps}
-- 总用时: {total_time:.2f}s
-- 总TPS: {total_tps:.1f}
-{memory_info}
-请按照System中的「单组分析输出格式」输出完整分析结果。如提供了历史对比数据，各阶段必须包含「与历史对比」，并在最后输出「与历史综合对比」段落。"""
-
-USER_MULTI_TEMPLATE = """请分析以下{count}组CFOP还原数据：
-
-## 整体数据统计
-- 总组数: {count}
-- 各组时间: {groups_times}
-- 平均时间: {avg_time:.2f}s
-- 去头尾平均: {ao_avg:.2f}s
-- 波动度(标准差): {std_dev:.2f}s
-- 最佳组: 第{best_idx}组 ({min_time:.2f}s)
-- 最差组: 第{worst_idx}组 ({max_time:.2f}s)
-
-## 各组详细数据
-{groups_detail}
-{memory_info}
-请按照以下结构输出：
-1. 先按System中的「单组分析输出格式」对每组逐一进行完整分析
-2. 再按System中的「多组分析额外要求」输出整体评估和综合建议
-如提供了历史对比数据，整体评估中必须包含「与历史综合对比」，分析多组平均与历史水平的差异。"""
-
-
 THEME = {
     "bg": "#f8f9fa",
     "fg": "#2d3436",
@@ -401,15 +219,6 @@ PHASE_LABELS = {
     "f2l3": "F2L-3", "f2l4": "F2L-4", "oll": "OLL", "pll": "PLL",
 }
 
-PHASE_DETAIL_TEMPLATE = """### {phase_name}
-{rotation_info}- 步骤(含时间戳): {timed_moves}
-- 步骤(合并后): {merged_moves}
-- 步数: {steps}
-- 用时: {time:.2f}s (起始: {start:.2f}s, 结束: {end:.2f}s)
-- TPS: {tps:.1f}
-{observation_info}
-"""
-
 PHASE_NAMES = {
     "cross": "Cross（底十字）",
     "f2l1": "F2L-1（第一组棱角对）",
@@ -421,3 +230,8 @@ PHASE_NAMES = {
 }
 
 PHASE_ORDER = ["cross", "f2l1", "f2l2", "f2l3", "f2l4", "oll", "pll"]
+
+TAG_LIBRARIES_JSON = json.dumps({
+    "strength": STRENGTH_TAGS,
+    "weakness": WEAKNESS_TAGS,
+}, ensure_ascii=False)
