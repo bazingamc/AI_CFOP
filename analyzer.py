@@ -15,7 +15,10 @@ from move_utils import parse_moves, parse_timed_moves, validate_orientation
 from move_utils import get_rotation_for_orientation, get_orientation_desc
 
 
-log = None
+import logging
+
+log = logging.getLogger(__name__)
+log.addHandler(logging.NullHandler())
 
 def set_logger(logger):
     global log
@@ -461,6 +464,15 @@ class CFOPAnalyzer:
                     orientations[phase] = self.front_color
                 continue
 
+            # 步骤太少（≤2步）时RUF评分不可靠，沿用上一阶段前色
+            if len(standard_moves) <= 2:
+                if orientations:
+                    prev_phase = PHASE_ORDER[PHASE_ORDER.index(phase) - 1]
+                    orientations[phase] = orientations.get(prev_phase, self.front_color)
+                else:
+                    orientations[phase] = self.front_color
+                continue
+
             best_front = self.front_color
             best_score = float('-inf')
 
@@ -724,9 +736,106 @@ class CFOPAnalyzer:
                 result.append(moves[i])
                 i += 1
         return result
+
+    @staticmethod
+    def merge_timed_moves(timed_moves: List[tuple], gap_threshold_ms: float = 300.0,
+                          middle_gap_threshold_ms: float = 100.0) -> List[tuple]:
+        """合并带时间戳的步骤，相同相邻步骤在间隔<=gap_threshold_ms时合并为X2，
+        对面相邻步骤在间隔<=middle_gap_threshold_ms时合并为中层旋转(M/S/E)
+
+        中层旋转规则（标准魔方约定）：
+        - M与L同向：R' L → M', R L' → M, R2 L2 → M2
+        - E与D同向：U' D → E', U D' → E, U2 D2 → E2
+        - S与F同向：F B' → S', F' B → S, F2 B2 → S2
+
+        合并条件：两个对面步骤方向相反（物理上同向旋转，如R'和L）
+
+        Args:
+            timed_moves: [(move, timestamp_ms), ...]
+            gap_threshold_ms: 同面合并间隔阈值（毫秒），默认300ms
+            middle_gap_threshold_ms: 中层旋转合并间隔阈值（毫秒），默认100ms
+
+        Returns:
+            [(merged_move, timestamp_ms), ...]
+        """
+        if not timed_moves:
+            return []
+
+        # 中层旋转查表：(face1, face2, dir1, dir2) → middle_move
+        # dir: 1=正向, -1=反向, 2=180度
+        # 合并条件：dir1 == -dir2（方向相反，物理同向）
+        MIDDLE_MAP = {
+            # M层（R-L对面）
+            ('R', 'L', -1, 1): "M'",    # R' L → M'
+            ('R', 'L', 1, -1): 'M',     # R L' → M
+            ('R', 'L', 2, 2): 'M2',     # R2 L2 → M2
+            ('L', 'R', 1, -1): "M'",    # L R' → M'
+            ('L', 'R', -1, 1): 'M',     # L' R → M
+            ('L', 'R', 2, 2): 'M2',     # L2 R2 → M2
+            # E层（U-D对面）
+            ('U', 'D', -1, 1): "E'",    # U' D → E'
+            ('U', 'D', 1, -1): 'E',     # U D' → E
+            ('U', 'D', 2, 2): 'E2',     # U2 D2 → E2
+            ('D', 'U', 1, -1): "E'",    # D U' → E'
+            ('D', 'U', -1, 1): 'E',     # D' U → E
+            ('D', 'U', 2, 2): 'E2',     # D2 U2 → E2
+            # S层（F-B对面）
+            ('F', 'B', 1, -1): "S'",    # F B' → S'
+            ('F', 'B', -1, 1): 'S',     # F' B → S
+            ('F', 'B', 2, 2): 'S2',     # F2 B2 → S2
+            ('B', 'F', -1, 1): "S'",    # B' F → S'
+            ('B', 'F', 1, -1): 'S',     # B F' → S
+            ('B', 'F', 2, 2): 'S2',     # B2 F2 → S2
+        }
+
+        def _parse_face_dir(move):
+            """解析步骤的面和方向: R→(R,1), R'→(R,-1), R2→(R,2)"""
+            if not move:
+                return None, 0
+            face = move[0]
+            if len(move) == 1:
+                return face, 1
+            elif move[1] == "'":
+                return face, -1
+            elif move[1] == '2':
+                return face, 2
+            return face, 1
+
+        result = []
+        i = 0
+        while i < len(timed_moves):
+            move, ts = timed_moves[i]
+
+            # 1. 尝试同面合并 (R R → R2)
+            if i + 1 < len(timed_moves):
+                next_move, next_ts = timed_moves[i + 1]
+                gap = next_ts - ts
+                if move == next_move and gap <= gap_threshold_ms:
+                    result.append((move[0] + '2', ts))
+                    i += 2
+                    continue
+
+            # 2. 尝试对面合并为中层旋转 (R' L → M')
+            if i + 1 < len(timed_moves):
+                next_move, next_ts = timed_moves[i + 1]
+                gap = next_ts - ts
+                if gap <= middle_gap_threshold_ms:
+                    face1, dir1 = _parse_face_dir(move)
+                    face2, dir2 = _parse_face_dir(next_move)
+                    if face1 and face2 and dir1 != 0 and dir2 != 0:
+                        key = (face1, face2, dir1, dir2)
+                        middle_move = MIDDLE_MAP.get(key)
+                        if middle_move:
+                            result.append((middle_move, ts))
+                            i += 2
+                            continue
+
+            result.append((move, ts))
+            i += 1
+        return result
     
     def format_output(self, include_timing: bool = True, include_orientation: bool = False) -> str:
-        oriented = self.get_phase_oriented_moves()
+        oriented_timed = self.get_phase_oriented_timed_moves()
         output = []
 
         if include_orientation:
@@ -735,11 +844,13 @@ class CFOPAnalyzer:
             output.append(f"底色：{bottom_name} 前色：{front_name}")
 
         for phase in PHASE_ORDER:
-            oriented_moves, y_rotation, front_color = oriented.get(phase, ([], '', self.front_color))
-            if not oriented_moves:
+            oriented_moves_list, y_rotation, front_color = oriented_timed.get(phase, ([], '', self.front_color))
+            if not oriented_moves_list:
                 continue
 
-            merged = "".join(self._merge_moves(oriented_moves))
+            # 使用带时间间隔判断的合并
+            merged_timed = self.merge_timed_moves(oriented_moves_list)
+            merged = "".join(m for m, _ in merged_timed)
             # 在公式前插入转体标识
             if y_rotation:
                 merged = y_rotation + ' ' + merged
@@ -767,10 +878,13 @@ class CFOPAnalyzer:
         return "\n".join(output)
     
     def get_phase_stats(self) -> Dict:
-        oriented = self.get_phase_oriented_moves()
+        oriented_timed = self.get_phase_oriented_timed_moves()
         stats = {}
         for phase in PHASE_ORDER:
-            oriented_moves, y_rotation, front_color = oriented.get(phase, ([], '', self.front_color))
+            oriented_moves_list, y_rotation, front_color = oriented_timed.get(phase, ([], '', self.front_color))
+            # 使用带时间间隔判断的合并
+            merged_timed = self.merge_timed_moves(oriented_moves_list)
+            oriented_moves = [m for m, _ in merged_timed]
             step_count = len(oriented_moves)
             if phase in self.phase_timestamps:
                 ts = self.phase_timestamps[phase]
@@ -1000,3 +1114,100 @@ class CFOPAnalyzer:
         for move, _ in self.solution:
             cube.apply_standard_move(move)
         return cube.is_pll_solved()
+
+    def generate_processed_solve(self) -> str:
+        """生成处理后的还原数据字符串
+
+        格式: 底色W前色R|C[R@0.00U@0.24R'@0.63]F1[y'U'@0.80...]F2[...]F3[...]F4[...]O[...]P[...]
+        - 已完成CFOP阶段拆解、转体识别、底色/前色确定
+        - 步骤已转换为最终观察坐标系
+        - 相邻相同步骤已合并（间隔<=0.3s时合并为X2）
+        - 转体步骤插入在各阶段开头
+        """
+        oriented_timed = self.get_phase_oriented_timed_moves()
+        phase_key_map = {
+            "cross": "C", "f2l1": "F1", "f2l2": "F2",
+            "f2l3": "F3", "f2l4": "F4", "oll": "O", "pll": "P"
+        }
+        # 头部：底色和初始前色，如 [WG]
+        header = f"[{self.bottom_color}{self.front_color}]"
+        parts = []
+        for phase in PHASE_ORDER:
+            oriented_moves_list, y_rotation, front_color = oriented_timed.get(phase, ([], '', ''))
+            if not oriented_moves_list and not y_rotation:
+                continue
+            # 构建带时间戳的步骤列表（含转体）
+            timed_list = []
+            if y_rotation:
+                # 转体步骤：使用该阶段第一步的时间戳
+                first_ts = oriented_moves_list[0][1] if oriented_moves_list else 0
+                timed_list.append((y_rotation, first_ts))
+            timed_list.extend(oriented_moves_list)
+            # 合并相邻相同步骤
+            merged = self.merge_timed_moves(timed_list)
+            # 格式化为 move@time
+            phase_str = "".join(f"{m}@{ts / 1000.0:.2f}" for m, ts in merged)
+            key = phase_key_map.get(phase, phase)
+            parts.append(f"{key}[{phase_str}]")
+        return header + "".join(parts)
+
+    @staticmethod
+    def parse_processed_solve(processed: str) -> Dict:
+        """解析处理后的还原数据字符串
+
+        Args:
+            processed: generate_processed_solve()生成的字符串
+
+        Returns:
+            {
+                "phases": {
+                    "cross": {"moves": [(move, ts_ms), ...], "y_rotation": ""},
+                    "f2l1": {...}, ...
+                },
+                "bottom_color": "...",
+                "front_color": "..."
+            }
+        """
+        import re
+        phase_key_rmap = {
+            "C": "cross", "F1": "f2l1", "F2": "f2l2",
+            "F3": "f2l3", "F4": "f2l4", "O": "oll", "P": "pll"
+        }
+        # 解析头部：底色前色（如 "[WG]"）
+        bottom_color = ""
+        front_color = ""
+        body = processed
+        # 新格式 [WG]
+        header_match = re.match(r'^\[([A-Z])([A-Z])\]', processed)
+        if header_match:
+            bottom_color = header_match.group(1)
+            front_color = header_match.group(2)
+            body = processed[header_match.end():]
+        elif "|" in processed:
+            # 兼容旧格式 WG|
+            header, body = processed.split("|", 1)
+            if len(header) >= 2:
+                bottom_color = header[0]
+                front_color = header[1]
+
+        phases = {}
+        # 匹配 key[content] 模式：C, F1-F4, O, P
+        pattern = r'([CF][1-4]|[COP])\[([^\]]*)\]'
+        for match in re.finditer(pattern, body):
+            key = match.group(1)
+            content = match.group(2)
+            phase_name = phase_key_rmap.get(key, key)
+            # 解析 move@time
+            timed_moves = []
+            y_rotation = ""
+            move_pattern = r"([UDFBRLMSEy][2']?)@(\d+\.?\d*)"
+            for m in re.finditer(move_pattern, content):
+                move = m.group(1)
+                ts_s = float(m.group(2))
+                ts_ms = ts_s * 1000.0
+                if move.startswith('y'):
+                    y_rotation = move
+                else:
+                    timed_moves.append((move, ts_ms))
+            phases[phase_name] = {"moves": timed_moves, "y_rotation": y_rotation}
+        return {"phases": phases, "bottom_color": bottom_color, "front_color": front_color}

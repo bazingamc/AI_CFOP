@@ -79,6 +79,12 @@ def init_db():
         c.execute("ALTER TABLE records ADD COLUMN strength_tags TEXT NOT NULL DEFAULT ''")
     if 'weakness_tags' not in col_names:
         c.execute("ALTER TABLE records ADD COLUMN weakness_tags TEXT NOT NULL DEFAULT ''")
+    if 'total_steps' not in col_names:
+        c.execute("ALTER TABLE records ADD COLUMN total_steps INTEGER NOT NULL DEFAULT 0")
+    if 'total_tps' not in col_names:
+        c.execute("ALTER TABLE records ADD COLUMN total_tps REAL NOT NULL DEFAULT 0")
+    if 'processed_solve' not in col_names:
+        c.execute("ALTER TABLE records ADD COLUMN processed_solve TEXT NOT NULL DEFAULT ''")
 
     c.execute("CREATE INDEX IF NOT EXISTS idx_phase_stats_record ON phase_stats(record_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_phase_stats_phase ON phase_stats(phase)")
@@ -89,7 +95,9 @@ def init_db():
 
 
 def save_record(scramble: str, solution: str, total_time: float,
-                bottom_color: str, phase_stats: Dict) -> int:
+                bottom_color: str, phase_stats: Dict,
+                total_steps: int = 0, total_tps: float = 0.0,
+                processed_solve: str = "") -> int:
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
@@ -102,8 +110,8 @@ def save_record(scramble: str, solution: str, total_time: float,
         return 0
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute(
-        "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color) VALUES (?, ?, ?, ?, ?, ?)",
-        (uid, now, scramble, solution, total_time, bottom_color)
+        "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color, total_steps, total_tps, processed_solve) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (uid, now, scramble, solution, total_time, bottom_color, total_steps, total_tps, processed_solve)
     )
     record_id = c.lastrowid
     for phase, stats in phase_stats.items():
@@ -220,22 +228,20 @@ def get_records_by_date(date_str: str = None, start_date: str = None, end_date: 
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
+    fields = "id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags, total_steps, total_tps, processed_solve"
     if start_date and end_date:
         c.execute(
-            "SELECT id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags "
-            "FROM records WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date ASC",
+            f"SELECT {fields} FROM records WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date ASC",
             (uid, start_date, end_date + " 23:59:59")
         )
     elif date_str:
         c.execute(
-            "SELECT id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags "
-            "FROM records WHERE user_id = ? AND date LIKE ? ORDER BY date ASC",
+            f"SELECT {fields} FROM records WHERE user_id = ? AND date LIKE ? ORDER BY date ASC",
             (uid, f"{date_str}%")
         )
     else:
         c.execute(
-            "SELECT id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags "
-            "FROM records WHERE user_id = ? ORDER BY date ASC",
+            f"SELECT {fields} FROM records WHERE user_id = ? ORDER BY date ASC",
             (uid,)
         )
     records = []
@@ -243,7 +249,8 @@ def get_records_by_date(date_str: str = None, start_date: str = None, end_date: 
         records.append({
             "id": row[0], "date": row[1], "scramble": row[2],
             "solution": row[3], "total_time": row[4], "bottom_color": row[5],
-            "analyzed": row[6], "strength_tags": row[7], "weakness_tags": row[8]
+            "analyzed": row[6], "strength_tags": row[7], "weakness_tags": row[8],
+            "total_steps": row[9], "total_tps": row[10], "processed_solve": row[11]
         })
     conn.close()
     return records
@@ -426,6 +433,119 @@ def update_record_tags(record_id: int, strength_tags: list, weakness_tags: list)
               (s_str, w_str, record_id))
     conn.commit()
     conn.close()
+
+
+def recalculate_all_records(progress_cb=None) -> dict:
+    """根据打乱公式和原始还原数据，重新计算并更新所有记录的计算字段
+
+    更新内容：bottom_color, total_steps, total_tps, processed_solve, phase_stats
+
+    Args:
+        progress_cb: 进度回调函数 callback(current, total)
+
+    Returns:
+        {"total": 总数, "updated": 成功数, "failed": 失败数}
+    """
+    from analyzer import CFOPAnalyzer, set_logger as a_set_logger, PHASE_ORDER
+    import logging
+
+    a_set_logger(logging.getLogger('memory_db'))
+
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    c.execute("SELECT id, scramble, solution, total_time FROM records WHERE user_id = ?", (uid,))
+    rows = c.fetchall()
+    conn.close()
+
+    if not rows:
+        return {"total": 0, "updated": 0, "failed": 0}
+
+    total = len(rows)
+    updated = 0
+    failed = 0
+
+    for idx, (record_id, scramble, solution, total_time) in enumerate(rows):
+        if progress_cb:
+            progress_cb(idx, total)
+
+        try:
+            bottom_color, analyzer, _ = CFOPAnalyzer.auto_detect_bottom_color(scramble, solution)
+            stats = analyzer.get_phase_stats()
+            bottom_color_name = COLOR_NAMES.get(bottom_color, "白")
+            total_steps = sum(s.get("steps", 0) for s in stats.values())
+            total_tps = total_steps / total_time if total_time > 0 else 0
+            processed_solve = analyzer.generate_processed_solve()
+
+            conn = _get_conn()
+            c2 = conn.cursor()
+            c2.execute(
+                "UPDATE records SET bottom_color=?, total_steps=?, total_tps=?, processed_solve=? WHERE id=?",
+                (bottom_color_name, total_steps, total_tps, processed_solve, record_id)
+            )
+            # 删除旧的phase_stats并重新插入
+            c2.execute("DELETE FROM phase_stats WHERE record_id=?", (record_id,))
+            for phase in PHASE_ORDER:
+                if phase in stats:
+                    s = stats[phase]
+                    c2.execute(
+                        "INSERT INTO phase_stats (record_id, phase, steps, time, observation_time, stutter_count, wasted_moves, tps) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (record_id, phase,
+                         s.get("steps", 0), s.get("time", 0),
+                         s.get("observation_time", 0), s.get("stutter_count", 0),
+                         s.get("wasted_moves", 0), s.get("tps", 0))
+                    )
+            conn.commit()
+            conn.close()
+            updated += 1
+        except Exception:
+            failed += 1
+
+    if progress_cb:
+        progress_cb(total, total)
+
+    return {"total": total, "updated": updated, "failed": failed}
+
+
+def backfill_processed_solve():
+    """为现有记录回填processed_solve字段"""
+    from analyzer import CFOPAnalyzer, set_logger
+    import logging
+
+    set_logger(logging.getLogger('memory_db'))
+
+    conn = _get_conn()
+    c = conn.cursor()
+    c.execute("SELECT id, scramble, solution, bottom_color FROM records WHERE processed_solve = '' OR processed_solve IS NULL")
+    rows = c.fetchall()
+    if not rows:
+        conn.close()
+        return 0
+
+    updated = 0
+    for row in rows:
+        record_id, scramble, solution, bottom_color = row
+        try:
+            if bottom_color:
+                from config import COLOR_CODES
+                bc = COLOR_CODES.get(bottom_color, bottom_color)
+                if bc and len(bc) <= 1:
+                    analyzer = CFOPAnalyzer.from_bottom_color(scramble, solution, bc)
+                else:
+                    _, analyzer, _ = CFOPAnalyzer.auto_detect_bottom_color(scramble, solution)
+            else:
+                _, analyzer, _ = CFOPAnalyzer.auto_detect_bottom_color(scramble, solution)
+
+            processed = analyzer.generate_processed_solve()
+            if processed:
+                c.execute("UPDATE records SET processed_solve = ? WHERE id = ?", (processed, record_id))
+                updated += 1
+        except Exception:
+            continue
+
+    conn.commit()
+    conn.close()
+    return updated
 
 
 def get_tag_stats() -> dict:
@@ -648,10 +768,13 @@ def import_csv(file_path: str, progress_cb=None) -> dict:
             # 使用重新分析的结果（而非CSV中的阶段数据，确保一致性）
             stats = analyzer.get_phase_stats()
             bottom_color_name = COLOR_NAMES.get(bottom_color, "白")
+            total_steps = sum(s.get("steps", 0) for s in stats.values())
+            total_tps = total_steps / total_time if total_time > 0 else 0
+            processed_solve = analyzer.generate_processed_solve()
 
             c.execute(
-                "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color) VALUES (?, ?, ?, ?, ?, ?)",
-                (uid, g["date"], scramble, solution, total_time, bottom_color_name)
+                "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color, total_steps, total_tps, processed_solve) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (uid, g["date"], scramble, solution, total_time, bottom_color_name, total_steps, total_tps, processed_solve)
             )
             record_id = c.lastrowid
             for phase in PHASE_ORDER:
@@ -761,9 +884,12 @@ def import_cstimer(file_path: str, progress_cb=None) -> dict:
             date_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S") if timestamp else ""
 
             bottom_color_name = COLOR_NAMES.get(bottom_color, "白")
+            total_steps = sum(s.get("steps", 0) for s in stats.values())
+            total_tps = total_steps / total_time if total_time > 0 else 0
+            processed_solve = analyzer.generate_processed_solve()
             c.execute(
-                "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color) VALUES (?, ?, ?, ?, ?, ?)",
-                (uid, date_str, scramble, review_str, total_time, bottom_color_name)
+                "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color, total_steps, total_tps, processed_solve) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (uid, date_str, scramble, review_str, total_time, bottom_color_name, total_steps, total_tps, processed_solve)
             )
             record_id = c.lastrowid
             for phase in PHASE_ORDER:

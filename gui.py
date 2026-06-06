@@ -3,7 +3,7 @@ GUI应用主类 - CFOPAnalyzerGUI
 """
 
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog
 from typing import List, Dict
 import threading
 import json
@@ -43,10 +43,10 @@ class CFOPAnalyzerGUI:
         self.root.resizable(True, True)
         self.root.configure(bg=THEME["bg"])
         self._stream_stop = False
-        self._last_analyzer = None
         self._stream_buffer = ""
         self._reasoning_buffer = ""
         self._solution_summary = ""
+        self._replay_analyzers = []
         self._status_dots = 0
         self._status_after_id = None
         self._animation_after_id = None
@@ -69,13 +69,20 @@ class CFOPAnalyzerGUI:
         self._create_widgets()
         self._load_saved_config()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.timeline_canvas.bind("<Configure>", self._on_canvas_resize)
         self.root.after(1, self._show_user_select_and_init)
 
     def _show_user_select_and_init(self):
         try:
             memory_db.init_db()
             user_manager.init_users_table()
+            # 回填processed_solve字段（仅对空值记录，一次性操作）
+            try:
+                updated = memory_db.backfill_processed_solve()
+                if updated > 0 and log:
+                    log.info(f"已回填 {updated} 条记录的processed_solve字段")
+            except Exception as e:
+                if log:
+                    log.warning(f"回填processed_solve失败: {e}")
             config = load_config()
             last_user_id = config.get("last_user_id")
             users = user_manager.get_all_users()
@@ -148,6 +155,12 @@ class CFOPAnalyzerGUI:
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def _on_user_select_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind("<MouseWheel>", _on_user_select_mousewheel)
+        scroll_frame.bind("<MouseWheel>", _on_user_select_mousewheel)
+        list_frame.bind("<MouseWheel>", _on_user_select_mousewheel)
 
         def refresh_user_list():
             for w in scroll_frame.winfo_children():
@@ -344,6 +357,12 @@ class CFOPAnalyzerGUI:
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def _on_user_manage_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind("<MouseWheel>", _on_user_manage_mousewheel)
+        scroll_frame.bind("<MouseWheel>", _on_user_manage_mousewheel)
+        list_frame.bind("<MouseWheel>", _on_user_manage_mousewheel)
 
         def refresh_list():
             for w in scroll_frame.winfo_children():
@@ -587,7 +606,17 @@ class CFOPAnalyzerGUI:
 
         def do_delete():
             user_manager.delete_user(user_id)
+            # 如果删除的是当前用户，重置用户状态
+            if user_id == self._current_user_id:
+                self._current_user_id = None
+                self._current_username = ""
+                memory_db.set_user(None)
             confirm.destroy()
+            # 刷新数据管理页面和首页统计
+            if hasattr(self, '_refresh_data_tab'):
+                self._refresh_data_tab()
+            if hasattr(self, '_refresh_home_stats'):
+                self._refresh_home_stats()
             if on_done:
                 on_done()
 
@@ -790,6 +819,17 @@ class CFOPAnalyzerGUI:
         style.map("TNotebook.Tab",
                   background=[("selected", THEME["card_bg"]), ("!selected", THEME["bg"])],
                   foreground=[("selected", THEME["accent"]), ("!selected", THEME["fg"])])
+
+        # 统一滚动条样式
+        style.configure("TScrollbar",
+                        background=THEME["border"],
+                        troughcolor=THEME["card_bg"],
+                        borderwidth=0,
+                        arrowsize=13,
+                        relief="flat")
+        style.map("TScrollbar",
+                  background=[("active", THEME["accent"]), ("pressed", THEME["accent_hover"])],
+                  arrowcolor=[("active", THEME["button_fg"])])
     
     def _create_help_icon(self, parent, help_key):
         help_text = HELP_TEXTS.get(help_key, "")
@@ -837,7 +877,7 @@ class CFOPAnalyzerGUI:
                                   padx=8, pady=6, wrap=tk.WORD,
                                   width=text_width, height=visible_height, relief="flat",
                                   cursor="arrow")
-            scrollbar = tk.Scrollbar(frame, command=text_widget.yview, width=12)
+            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text_widget.yview)
             scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
             text_widget.config(yscrollcommand=scrollbar.set)
             text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -869,6 +909,65 @@ class CFOPAnalyzerGUI:
         
         widget.bind("<Enter>", show_tooltip)
         widget.bind("<Leave>", hide_tooltip)
+
+    def _on_recalculate_db(self):
+        """点击数据库更新按钮，重新计算所有记录"""
+        if not messagebox.askyesno("确认", "将重新计算当前用户所有记录的分析结果，是否继续？"):
+            return
+
+        # 创建进度弹窗
+        progress_win = tk.Toplevel(self.root)
+        progress_win.title("更新数据库")
+        progress_win.geometry("400x150")
+        progress_win.resizable(False, False)
+        progress_win.transient(self.root)
+        progress_win.grab_set()
+        progress_win.configure(bg=THEME["bg"])
+
+        tk.Label(progress_win, text="正在重新计算分析结果...",
+                 bg=THEME["bg"], fg=THEME["fg"],
+                 font=("Microsoft YaHei", 11)).pack(pady=(20, 10))
+
+        progress_var = tk.DoubleVar(value=0)
+        progress_bar = ttk.Progressbar(progress_win, variable=progress_var, maximum=100, length=350)
+        progress_bar.pack(pady=5)
+
+        status_label = tk.Label(progress_win, text="准备中...",
+                                bg=THEME["bg"], fg="#888",
+                                font=("Microsoft YaHei", 9))
+        status_label.pack(pady=5)
+
+        def on_progress(current, total):
+            progress_win.after(0, lambda: progress_var.set(current / total * 100 if total > 0 else 0))
+            progress_win.after(0, lambda: status_label.config(text=f"{current}/{total}"))
+
+        def do_recalculate():
+            result = memory_db.recalculate_all_records(progress_cb=on_progress)
+            progress_win.after(0, lambda: self._on_recalculate_done(progress_win, result))
+
+        import threading
+        t = threading.Thread(target=do_recalculate, daemon=True)
+        t.start()
+
+    def _on_recalculate_done(self, progress_win, result):
+        """数据库重算完成回调"""
+        try:
+            progress_win.destroy()
+        except Exception:
+            pass
+
+        total = result.get("total", 0)
+        updated = result.get("updated", 0)
+        failed = result.get("failed", 0)
+
+        msg = f"更新完成！\n总计: {total} 条\n成功: {updated} 条\n失败: {failed} 条"
+        messagebox.showinfo("更新完成", msg)
+
+        # 刷新界面
+        if hasattr(self, '_refresh_data_tab'):
+            self._refresh_data_tab()
+        if hasattr(self, '_refresh_home_stats'):
+            self._refresh_home_stats()
 
     def _on_smart_paste_toggle(self):
         if self._smart_paste_var.get():
@@ -1299,7 +1398,7 @@ class CFOPAnalyzerGUI:
 【快速开始】
 1. 在cstimer中打乱并还原您的魔方。
 2. 点击成绩列表中的还原时间，完整复制弹窗中的"打乱公式"和"回顾"中的内容到软件输入框。
-3. 配置硅基流动API Key 并选择合适的模型。
+3. 配置API Key 并选择合适的模型。
 4. 点击"AI分析"开始分析。
 5. 分析结果可以保存到本地。
 
@@ -1312,24 +1411,53 @@ class CFOPAnalyzerGUI:
 【模型选择】
 - 点击"刷新"按钮获取可用模型列表
 - 不同模型分析结果可能有较大差异，性能越高的模型分析结果越准确
-- 高性能模型推荐GLM系列，性价比模型推荐DeepSeek系列 
+- 高性能模型推荐GLM系列，性价比模型推荐DeepSeek系列
 
-【功能特点】
-• 自动识别CFOP各阶段
-• 计算观察时间和执行时间
-• 定位卡顿点
-• 生成训练建议
+【功能说明】
+
+🏠 首页
+• 水平统计：展示PB、平均用时、TPS、各阶段详细统计（步数/用时/观察/卡顿/废步/TPS及标准差），以及优点和缺点TOP3标签
+• 智能训练：今日训练总结，包含统计文本、时间趋势折线图、时间分布直方图，支持AI总结和Ao12分析
+
+🔬 深度分析
+• 单组/多组模式：单组分析单次还原，多组分析最多20组还原并计算平均和波动度
+• 底色自动识别：无需手动选择底色，软件自动检测
+• 解法复盘：Canvas色块时间轴，按CFOP阶段分行显示，步骤宽度与时间成正比，鼠标悬停查看步骤详情和阶段统计
+• AI流式输出：实时显示AI推理过程和分析结果，支持Markdown格式渲染
+• 智能粘贴：开启后自动监控剪贴板，识别csTimer数据并填入输入框，支持去重检测
+
+📂 数据管理
+• 数据列表：展示还原记录，支持按时间/用时/步数/TPS排序，点击列标题切换升降序
+• 日期筛选：按日期范围筛选记录，支持"本月"快捷按钮
+• 多选分析：支持Ctrl/Shift多选记录，点击"分析选中项"直接跳转深度分析
+• 还原详情：双击记录查看详情，含解法复盘时间轴和优缺点标签
+• 数据导入：支持csTimer导出文件和CSV文件导入，带进度弹窗
+• 数据导出：导出为CSV文件
+
+⚙️ 设置
+• API Key配置：密钥加密存储，安全可靠
+• 模型选择：从API获取可用模型列表
+• 智能粘贴开关：控制剪贴板自动监控
+• 记忆模式开关：记录分析历史，提供对比参考和训练建议
+• 数据库更新：重新计算所有记录的分析结果
+
+👤 用户管理
+• 多用户支持：创建、编辑、删除用户，支持自定义头像
+• 成绩异常检测：分析时自动检测成绩偏差，偏差过大时提示确认或切换用户
 
 【交流反馈】
 • 交流QQ群：322267527"""
         
-        text_widget = scrolledtext.ScrolledText(main_frame, width=55, height=16,
-                                                font=("Microsoft YaHei", 10),
-                                                bg=THEME["card_bg"],
-                                                fg=THEME["fg"],
-                                                relief="flat", borderwidth=0,
-                                                wrap=tk.WORD)
-        text_widget.pack(fill=tk.BOTH, expand=True)
+        text_widget = tk.Text(main_frame, width=55, height=16,
+                              font=("Microsoft YaHei", 10),
+                              bg=THEME["card_bg"],
+                              fg=THEME["fg"],
+                              relief="flat", borderwidth=0,
+                              wrap=tk.WORD, highlightthickness=0)
+        guide_scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=guide_scrollbar.set)
+        guide_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         text_widget.insert("1.0", guide_text)
         text_widget.config(state="disabled")
         
@@ -1429,9 +1557,8 @@ class CFOPAnalyzerGUI:
         self._home_stats_text.tag_configure("bold", font=("Consolas", 9, "bold"))
         self._home_stats_text.tag_configure("highlight_label", font=("Consolas", 11, "bold"), foreground="#4A90D9")
         self._home_stats_text.tag_configure("highlight_value", font=("Consolas", 13, "bold"), foreground="#2E6FBA")
-        self._home_stats_scroll_y = tk.Scrollbar(self._home_stats_panel, command=self._home_stats_text.yview, width=10)
-        self._home_stats_scroll_x = tk.Scrollbar(self._home_stats_panel, command=self._home_stats_text.xview,
-                                                  orient=tk.HORIZONTAL, width=10)
+        self._home_stats_scroll_y = ttk.Scrollbar(self._home_stats_panel, orient=tk.VERTICAL, command=self._home_stats_text.yview)
+        self._home_stats_scroll_x = ttk.Scrollbar(self._home_stats_panel, orient=tk.HORIZONTAL, command=self._home_stats_text.xview)
         self._home_stats_text.config(yscrollcommand=self._home_stats_scroll_y.set,
                                       xscrollcommand=self._home_stats_scroll_x.set)
         self._home_stats_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
@@ -1589,18 +1716,21 @@ class CFOPAnalyzerGUI:
         self.status_label = ttk.Label(button_frame, text="", style="Status.TLabel")
         self.status_label.pack(side=tk.LEFT)
 
-        self.timeline_header = ttk.Frame(tab)
-        self.timeline_header.pack(fill=tk.X, padx=8, pady=(0, 2))
-        ttk.Label(self.timeline_header, text="  还原步骤时间轴", font=("Microsoft YaHei", 10, "bold"),
+        # 解法复盘显示区域（Canvas时间轴）
+        self.replay_header = ttk.Frame(tab)
+        self.replay_header.pack(fill=tk.X, padx=8, pady=(0, 2))
+        ttk.Label(self.replay_header, text="  解法复盘", font=("Microsoft YaHei", 10, "bold"),
                   foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
 
-        self.timeline_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=8, pady=8,
-                                  highlightthickness=1, highlightbackground=THEME["border"])
-        self.timeline_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+        self.replay_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=8, pady=8,
+                                      highlightthickness=1, highlightbackground=THEME["border"])
+        self.replay_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
+        self.replay_frame.pack_propagate(False)
+        self.replay_frame.configure(height=200)
 
-        self.timeline_canvas = tk.Canvas(self.timeline_frame, height=100, bg=THEME["card_bg"],
-                                          highlightthickness=0)
-        self.timeline_canvas.pack(fill=tk.X)
+        # 使用ScrolledText作为容器，内部放置Canvas
+        self.replay_canvas_container = tk.Frame(self.replay_frame, bg=THEME["card_bg"])
+        self.replay_canvas_container.pack(fill=tk.BOTH, expand=True)
 
         self.result_header = ttk.Frame(tab)
         self.result_header.pack(fill=tk.X, padx=8, pady=(0, 2))
@@ -1615,13 +1745,16 @@ class CFOPAnalyzerGUI:
                                 highlightthickness=1, highlightbackground=THEME["border"])
         self.result_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
-        self.result_text = scrolledtext.ScrolledText(self.result_frame, width=60, height=20, wrap=tk.WORD,
-                                                      font=("Microsoft YaHei", 11),
-                                                      bg=THEME["card_bg"], fg=THEME["fg"],
-                                                      relief="flat", borderwidth=0,
-                                                      highlightthickness=0,
-                                                      insertbackground=THEME["accent"])
-        self.result_text.pack(fill=tk.BOTH, expand=True)
+        self.result_text = tk.Text(self.result_frame, width=60, height=20, wrap=tk.WORD,
+                                   font=("Microsoft YaHei", 11),
+                                   bg=THEME["card_bg"], fg=THEME["fg"],
+                                   relief="flat", borderwidth=0,
+                                   highlightthickness=0,
+                                   insertbackground=THEME["accent"])
+        result_scrollbar = ttk.Scrollbar(self.result_frame, orient=tk.VERTICAL, command=self.result_text.yview)
+        self.result_text.configure(yscrollcommand=result_scrollbar.set)
+        result_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.result_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         configure_markdown_tags(self.result_text)
 
     def _build_data_tab(self):
@@ -1684,21 +1817,25 @@ class CFOPAnalyzerGUI:
                                highlightthickness=1, highlightbackground=THEME["border"])
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
-        columns = ("time", "total_time", "strength", "weakness", "scramble")
+        columns = ("time", "total_time", "total_steps", "total_tps", "scramble", "strength", "weakness")
         self._data_tree = ttk.Treeview(tree_frame, columns=columns, show="headings",
                                         selectmode="extended", height=20)
 
         self._data_tree.heading("time", text="还原时间 ▲", command=lambda: self._sort_data_by_column("time"))
-        self._data_tree.heading("total_time", text="总用时(s) ▲", command=lambda: self._sort_data_by_column("total_time"))
+        self._data_tree.heading("total_time", text="用时(s) ▲", command=lambda: self._sort_data_by_column("total_time"))
+        self._data_tree.heading("total_steps", text="步数 ▲", command=lambda: self._sort_data_by_column("total_steps"))
+        self._data_tree.heading("total_tps", text="TPS ▲", command=lambda: self._sort_data_by_column("total_tps"))
+        self._data_tree.heading("scramble", text="打乱公式")
         self._data_tree.heading("strength", text="优点")
         self._data_tree.heading("weakness", text="缺点")
-        self._data_tree.heading("scramble", text="打乱公式")
 
         self._data_tree.column("time", width=180, anchor="center", minwidth=140)
-        self._data_tree.column("total_time", width=90, anchor="center", minwidth=60)
-        self._data_tree.column("strength", width=200, anchor="w", minwidth=80)
-        self._data_tree.column("weakness", width=200, anchor="w", minwidth=80)
-        self._data_tree.column("scramble", width=350, anchor="w", minwidth=100)
+        self._data_tree.column("total_time", width=80, anchor="center", minwidth=60)
+        self._data_tree.column("total_steps", width=60, anchor="center", minwidth=50)
+        self._data_tree.column("total_tps", width=60, anchor="center", minwidth=50)
+        self._data_tree.column("scramble", width=300, anchor="w", minwidth=100)
+        self._data_tree.column("strength", width=260, anchor="w", minwidth=80)
+        self._data_tree.column("weakness", width=260, anchor="w", minwidth=80)
 
         tree_scroll_y = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self._data_tree.yview)
         tree_scroll_x = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self._data_tree.xview)
@@ -1789,8 +1926,24 @@ class CFOPAnalyzerGUI:
         else:
             records = memory_db.get_records_by_date()
 
+        # 为缺少total_steps/total_tps的记录回填
+        for rec in records:
+            if rec.get("total_steps", 0) == 0 and rec.get("solution"):
+                from move_utils import parse_timed_moves
+                try:
+                    timed = parse_timed_moves(rec["solution"])
+                    rec["total_steps"] = len(timed)
+                    total_time = rec.get("total_time", 0)
+                    rec["total_tps"] = rec["total_steps"] / total_time if total_time > 0 else 0
+                except Exception:
+                    pass
+
         if self._data_sort_column == "total_time":
             records.sort(key=lambda r: r["total_time"], reverse=not self._data_sort_ascending)
+        elif self._data_sort_column == "total_steps":
+            records.sort(key=lambda r: r.get("total_steps", 0), reverse=not self._data_sort_ascending)
+        elif self._data_sort_column == "total_tps":
+            records.sort(key=lambda r: r.get("total_tps", 0), reverse=not self._data_sort_ascending)
         else:
             records.sort(key=lambda r: r["date"], reverse=not self._data_sort_ascending)
 
@@ -1805,9 +1958,12 @@ class CFOPAnalyzerGUI:
             w_tags = rec.get("weakness_tags", "") or ""
             is_analyzed = rec.get("analyzed", 0)
             tag_name = "analyzed" if is_analyzed else ""
+            total_steps = rec.get("total_steps", 0)
+            total_tps = rec.get("total_tps", 0)
             self._data_tree.insert("", tk.END, iid=str(rec["id"]),
                                     values=(time_str, f"{rec['total_time']:.2f}",
-                                            s_tags, w_tags, rec["scramble"]),
+                                            total_steps, f"{total_tps:.1f}",
+                                            rec["scramble"], s_tags, w_tags),
                                     tags=(tag_name,))
 
         count = len(records)
@@ -1827,9 +1983,10 @@ class CFOPAnalyzerGUI:
         header_font = ("Microsoft YaHei", 9, "bold")
         pad = 20  # 左右内边距
 
-        col_keys = ["time", "total_time", "strength", "weakness", "scramble"]
-        headings = {"time": "还原时间", "total_time": "总用时(s)",
-                    "strength": "优点", "weakness": "缺点", "scramble": "打乱公式"}
+        col_keys = ["time", "total_time", "total_steps", "total_tps", "scramble", "strength", "weakness"]
+        headings = {"time": "还原时间", "total_time": "用时(s)",
+                    "total_steps": "步数", "total_tps": "TPS",
+                    "scramble": "打乱公式", "strength": "优点", "weakness": "缺点"}
 
         max_widths = {}
         for key in col_keys:
@@ -1885,12 +2042,15 @@ class CFOPAnalyzerGUI:
             self._data_sort_ascending = True
 
         arrow = "▲" if self._data_sort_ascending else "▼"
-        if col == "time":
-            self._data_tree.heading("time", text=f"还原时间 {arrow}", command=lambda: self._sort_data_by_column("time"))
-            self._data_tree.heading("total_time", text="总用时(s)", command=lambda: self._sort_data_by_column("total_time"))
-        else:
-            self._data_tree.heading("time", text="还原时间", command=lambda: self._sort_data_by_column("time"))
-            self._data_tree.heading("total_time", text=f"总用时(s) {arrow}", command=lambda: self._sort_data_by_column("total_time"))
+        # 重置所有排序列标题
+        self._data_tree.heading("time", text=f"还原时间 {arrow}" if col == "time" else "还原时间",
+                                command=lambda: self._sort_data_by_column("time"))
+        self._data_tree.heading("total_time", text=f"用时(s) {arrow}" if col == "total_time" else "用时(s)",
+                                command=lambda: self._sort_data_by_column("total_time"))
+        self._data_tree.heading("total_steps", text=f"步数 {arrow}" if col == "total_steps" else "步数",
+                                command=lambda: self._sort_data_by_column("total_steps"))
+        self._data_tree.heading("total_tps", text=f"TPS {arrow}" if col == "total_tps" else "TPS",
+                                command=lambda: self._sort_data_by_column("total_tps"))
 
         self._load_data_records()
 
@@ -1943,8 +2103,8 @@ class CFOPAnalyzerGUI:
         dialog.grab_set()
         dialog.resizable(True, True)
 
-        dialog_width = 700
-        dialog_height = 550
+        dialog_width = 800
+        dialog_height = 650
         x = self.root.winfo_x() + (self.root.winfo_width() - dialog_width) // 2
         y = self.root.winfo_y() + (self.root.winfo_height() - dialog_height) // 2
         dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
@@ -1959,8 +2119,22 @@ class CFOPAnalyzerGUI:
                  bg=THEME["card_bg"], fg=THEME["fg"]).pack(side=tk.LEFT, padx=(0, 16))
         tk.Label(info_frame, text=f"⏱ 总用时: {detail['total_time']:.2f}s", font=("Microsoft YaHei", 10, "bold"),
                  bg=THEME["card_bg"], fg=THEME["accent"]).pack(side=tk.LEFT, padx=(0, 16))
-        tk.Label(info_frame, text=f"🎨 底色: {detail['bottom_color']}", font=("Microsoft YaHei", 10),
-                 bg=THEME["card_bg"], fg=THEME["fg"]).pack(side=tk.LEFT)
+        # 从phase_stats或solution计算步数和TPS
+        total_steps = detail.get("total_steps", 0)
+        total_tps = detail.get("total_tps", 0)
+        if total_steps == 0 and detail.get("solution"):
+            from move_utils import parse_timed_moves
+            try:
+                timed = parse_timed_moves(detail["solution"])
+                total_steps = len(timed)
+                total_time = detail.get("total_time", 0)
+                total_tps = total_steps / total_time if total_time > 0 else 0
+            except Exception:
+                pass
+        tk.Label(info_frame, text=f"🔢 步数: {total_steps}", font=("Microsoft YaHei", 10, "bold"),
+                 bg=THEME["card_bg"], fg=THEME["accent"]).pack(side=tk.LEFT, padx=(0, 16))
+        tk.Label(info_frame, text=f"⚡ TPS: {total_tps:.1f}", font=("Microsoft YaHei", 10, "bold"),
+                 bg=THEME["card_bg"], fg=THEME["accent"]).pack(side=tk.LEFT)
 
         # 优缺点标签显示
         s_tags = detail.get("strength_tags", "") or ""
@@ -1989,86 +2163,295 @@ class CFOPAnalyzerGUI:
 
         scramble_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
         scramble_frame.pack(fill=tk.X, pady=(0, 4))
-        tk.Label(scramble_frame, text="打乱公式:", font=("Microsoft YaHei", 9, "bold"),
+        tk.Label(scramble_frame, text="打乱公式:", font=("Microsoft YaHei", 11, "bold"),
                  bg=THEME["card_bg"], fg=THEME["fg"]).pack(anchor="w")
-        tk.Label(scramble_frame, text=detail["scramble"], font=("Consolas", 9),
+        tk.Label(scramble_frame, text=detail["scramble"], font=("Consolas", 12),
                  bg=THEME["card_bg"], fg=THEME["fg"], wraplength=650, justify="left").pack(anchor="w", padx=(12, 0))
 
-        # 解法复盘：重新分析获取各阶段还原步骤（含转体识别）
-        replay_text = ""
-        try:
-            from analyzer import CFOPAnalyzer
-            _, replay_analyzer, _ = CFOPAnalyzer.auto_detect_bottom_color(detail["scramble"], detail["solution"])
-            replay_text = replay_analyzer.format_output(include_timing=False, include_orientation=True)
-        except Exception:
-            replay_text = detail["solution"]
+        # 解法复盘：使用processed_solve（已转换坐标系、已合并步骤）
+        from analyzer import CFOPAnalyzer, PHASE_ORDER
+        from config import PHASE_COLORS, PHASE_LABELS as CFG_PHASE_LABELS
+        from analyzer import COLOR_NAMES
+
+        processed_solve = detail.get("processed_solve", "")
+        # 如果没有processed_solve，尝试从原始数据重新分析生成
+        parsed_phases = None
+        if processed_solve:
+            try:
+                parsed_phases = CFOPAnalyzer.parse_processed_solve(processed_solve)
+            except Exception:
+                parsed_phases = None
+        if not parsed_phases:
+            try:
+                _, replay_analyzer, _ = CFOPAnalyzer.auto_detect_bottom_color(detail["scramble"], detail["solution"])
+                parsed_phases = CFOPAnalyzer.parse_processed_solve(replay_analyzer.generate_processed_solve())
+            except Exception:
+                parsed_phases = None
 
         solution_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
         solution_frame.pack(fill=tk.X, pady=(0, 4))
-        tk.Label(solution_frame, text="解法复盘:", font=("Microsoft YaHei", 9, "bold"),
-                 bg=THEME["card_bg"], fg=THEME["fg"]).pack(anchor="w")
-        sol_text = tk.Text(solution_frame, font=("Consolas", 9), height=8, wrap=tk.WORD,
-                           bg=THEME["input_bg"], fg=THEME["fg"], relief="flat", borderwidth=0)
-        sol_text.insert("1.0", replay_text)
-        sol_text.config(state="disabled")
-        sol_text.pack(fill=tk.X, padx=(12, 0))
-
-        phase_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
-        phase_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
-        tk.Label(phase_frame, text="各阶段详情:", font=("Microsoft YaHei", 9, "bold"),
+        tk.Label(solution_frame, text="解法复盘:", font=("Microsoft YaHei", 11, "bold"),
                  bg=THEME["card_bg"], fg=THEME["fg"]).pack(anchor="w")
 
-        phase_tree_frame = tk.Frame(phase_frame, bg=THEME["card_bg"])
-        phase_tree_frame.pack(fill=tk.BOTH, expand=True, padx=(12, 0))
+        if parsed_phases:
+            # 朝向信息：优先使用processed_solve中的底色/前色
+            bc = parsed_phases.get("bottom_color", "")
+            fc = parsed_phases.get("front_color", "")
+            bottom_name = COLOR_NAMES.get(bc, detail.get("bottom_color", "白")) if bc else detail.get("bottom_color", "白")
+            front_name = COLOR_NAMES.get(fc, "") if fc else ""
+            orient_frame = tk.Frame(solution_frame, bg=THEME["card_bg"])
+            orient_frame.pack(anchor="w", padx=(12, 0), pady=(2, 4))
+            if front_name:
+                tk.Label(orient_frame, text=f"底色：{bottom_name}  前色：{front_name}",
+                         font=("Microsoft YaHei", 10), bg=THEME["card_bg"], fg=THEME["fg"]).pack(side=tk.LEFT)
+            else:
+                tk.Label(orient_frame, text=f"底色：{bottom_name}",
+                         font=("Microsoft YaHei", 10), bg=THEME["card_bg"], fg=THEME["fg"]).pack(side=tk.LEFT)
 
-        phase_columns = ("phase", "steps", "time", "obs_time", "stutter", "wasted", "tps")
-        phase_tree = ttk.Treeview(phase_tree_frame, columns=phase_columns, show="headings", height=7)
+            phase_data = parsed_phases.get("phases", parsed_phases)
 
-        phase_tree.heading("phase", text="阶段")
-        phase_tree.heading("steps", text="步数")
-        phase_tree.heading("time", text="用时(s)")
-        phase_tree.heading("obs_time", text="观察(s)")
-        phase_tree.heading("stutter", text="卡顿")
-        phase_tree.heading("wasted", text="废步")
-        phase_tree.heading("tps", text="TPS")
+            # 步骤颜色映射
+            face_colors = {
+                'U': "#0984e3", "U'": "#74b9ff", "U2": "#0984e3",
+                'D': "#00b894", "D'": "#55efc4", "D2": "#00b894",
+                'F': "#e17055", "F'": "#fab1a0", "F2": "#e17055",
+                'R': "#fd79a8", "R'": "#fdcb6e", "R2": "#fd79a8",
+                'B': "#6c5ce7", "B'": "#a29bfe", "B2": "#6c5ce7",
+                'L': "#fdcb6e", "L'": "#ffeaa7", "L2": "#fdcb6e",
+                'M': "#e84393", "M'": "#fd79a8", "M2": "#e84393",
+                'E': "#00cec9", "E'": "#81ecec", "E2": "#00cec9",
+                'S': "#d63031", "S'": "#ff7675", "S2": "#d63031",
+            }
 
-        phase_tree.column("phase", width=70, anchor="center")
-        phase_tree.column("steps", width=60, anchor="center")
-        phase_tree.column("time", width=80, anchor="center")
-        phase_tree.column("obs_time", width=80, anchor="center")
-        phase_tree.column("stutter", width=60, anchor="center")
-        phase_tree.column("wasted", width=60, anchor="center")
-        phase_tree.column("tps", width=60, anchor="center")
+            min_block_width = 12
+            y_rotation_width = 16
 
-        phase_labels = {"cross": "Cross", "f2l1": "F2L-1", "f2l2": "F2L-2",
-                        "f2l3": "F2L-3", "f2l4": "F2L-4", "oll": "OLL", "pll": "PLL"}
-        phase_order = ["cross", "f2l1", "f2l2", "f2l3", "f2l4", "oll", "pll"]
+            bar_height = 18
+            label_height = 16
+            row_height = bar_height + label_height + 10
+            margin_left = 50
+            margin_right = 20
 
-        has_phases = any(detail["phase_stats"].get(pk) for pk in phase_order)
-        if not has_phases:
-            tk.Label(phase_tree_frame, text="⚠ 无阶段数据，该记录可能未完成还原或数据异常",
-                     font=("Microsoft YaHei", 9), bg=THEME["card_bg"], fg="#e17055").pack(anchor="w", pady=8)
+            # 从parsed_phases计算每步时间间隔
+            phase_step_data = {}
+            for phase in PHASE_ORDER:
+                pd = phase_data.get(phase)
+                if not pd or not pd.get("moves"):
+                    continue
+                moves = pd["moves"]  # [(move, ts_ms), ...]
+                y_rotation = pd.get("y_rotation", "")
+                # 计算每步时间间隔
+                step_times = []
+                for i, (move, ts) in enumerate(moves):
+                    if i + 1 < len(moves):
+                        step_times.append(moves[i + 1][1] - ts)
+                    else:
+                        # 最后一步：用该阶段其他步的平均时间估算
+                        if len(step_times) > 0:
+                            step_times.append(sum(step_times) / len(step_times))
+                        else:
+                            step_times.append(100)
+                # 步骤已经是合并后的（processed_solve中已合并）
+                merged_moves = [m for m, _ in moves]
+                merged_times = step_times
+                total_ms = sum(merged_times)
+                phase_step_data[phase] = (merged_moves, y_rotation, merged_times, total_ms)
 
-        for phase_key in phase_order:
-            ps = detail["phase_stats"].get(phase_key, {})
-            if ps:
-                phase_tree.insert("", tk.END, values=(
-                    phase_labels.get(phase_key, phase_key),
-                    ps.get("steps", 0),
-                    f"{ps.get('time', 0):.2f}",
-                    f"{ps.get('observation_time', 0):.2f}",
-                    ps.get("stutter_count", 0),
-                    ps.get("wasted_moves", 0),
-                    f"{ps.get('tps', 0):.1f}"
-                ))
+            # 计算最短步骤时间
+            min_step_time = float('inf')
+            for phase in PHASE_ORDER:
+                if phase not in phase_step_data:
+                    continue
+                _, _, merged_times, _ = phase_step_data[phase]
+                for t in merged_times:
+                    if t > 0 and t < min_step_time:
+                        min_step_time = t
+            if min_step_time == float('inf'):
+                min_step_time = 100
 
-        present_phases = [pk for pk in phase_order if detail["phase_stats"].get(pk)]
-        if has_phases and len(present_phases) < len(phase_order):
-            missing = [phase_labels[pk] for pk in phase_order if not detail["phase_stats"].get(pk)]
-            tk.Label(phase_tree_frame, text=f"⚠ 缺少阶段: {', '.join(missing)}",
-                     font=("Microsoft YaHei", 9), bg=THEME["card_bg"], fg="#e17055").pack(anchor="w", pady=(4, 0))
+            # 计算每行自然宽度（按时间比例，最小宽度保证）
+            time_to_width_ratio = min_block_width / min_step_time
+            row_natural_widths = {}
+            for phase in PHASE_ORDER:
+                if phase not in phase_step_data:
+                    continue
+                _, y_rotation, merged_times, _ = phase_step_data[phase]
+                natural_w = sum(max(min_block_width, t * time_to_width_ratio) for t in merged_times)
+                if y_rotation:
+                    natural_w += y_rotation_width
+                row_natural_widths[phase] = natural_w
 
-        phase_tree.pack(fill=tk.BOTH, expand=True)
+            max_natural_width = max(row_natural_widths.values()) if row_natural_widths else 0
+
+            total_rows = sum(1 for p in PHASE_ORDER if p in phase_step_data)
+            canvas_height = total_rows * row_height + 10
+
+            timeline_frame = tk.Frame(solution_frame, bg=THEME["card_bg"])
+            timeline_frame.pack(fill=tk.BOTH, expand=True, padx=(12, 0), pady=(2, 0))
+
+            timeline_canvas = tk.Canvas(timeline_frame, height=canvas_height,
+                                        bg=THEME["card_bg"], highlightthickness=0)
+            timeline_canvas.pack(fill=tk.BOTH, expand=True)
+
+            # 阶段详情tooltip
+            tooltip_win = [None]
+            tooltip_text = [None]
+
+            def _show_tooltip(event, text):
+                if tooltip_text[0] == text and tooltip_win[0]:
+                    # 内容不变，只更新位置
+                    tooltip_win[0].wm_geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
+                    return
+                _hide_tooltip()
+                tw = tk.Toplevel(timeline_canvas)
+                tw.wm_overrideredirect(True)
+                tw.wm_attributes("-topmost", True)
+                tw.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
+                lbl = tk.Label(tw, text=text, font=("Microsoft YaHei", 9),
+                               bg="#ffffdd", fg="#333333", relief="solid", borderwidth=1,
+                               padx=6, pady=4, justify="left")
+                lbl.pack()
+                tooltip_win[0] = tw
+                tooltip_text[0] = text
+
+            def _hide_tooltip():
+                if tooltip_win[0]:
+                    tooltip_win[0].destroy()
+                    tooltip_win[0] = None
+                tooltip_text[0] = None
+
+            # 记录区域用于tooltip：色块区域和阶段标签区域
+            step_rects = []   # [(x1, x2, y1, y2, tooltip_text), ...]
+            label_rects = []  # [(x1, x2, y1, y2, tooltip_text), ...]
+
+            def _on_timeline_canvas_configure(event):
+                available_width = event.width - margin_left - margin_right
+                if available_width <= 0:
+                    return
+                # 始终按比例缩放填满可用宽度，但每个步骤最小宽度保证
+                scale_ratio = available_width / max_natural_width if max_natural_width > 0 else 1
+
+                # 修正：最小宽度约束可能导致实际总宽度超出可用宽度
+                if scale_ratio < 1:
+                    max_actual_width = 0
+                    for phase in PHASE_ORDER:
+                        if phase not in phase_step_data:
+                            continue
+                        _, y_rotation, merged_times, _ = phase_step_data[phase]
+                        actual_w = sum(max(min_block_width, max(min_block_width, t * time_to_width_ratio) * scale_ratio) for t in merged_times)
+                        if y_rotation:
+                            actual_w += y_rotation_width
+                        max_actual_width = max(max_actual_width, actual_w)
+                    if max_actual_width > available_width and max_actual_width > 0:
+                        scale_ratio *= available_width / max_actual_width
+
+                timeline_canvas.delete("all")
+                step_rects.clear()
+                label_rects.clear()
+
+                row_idx = 0
+                for phase in PHASE_ORDER:
+                    if phase not in phase_step_data:
+                        continue
+                    merged_moves, y_rotation, merged_times, total_ms = phase_step_data[phase]
+                    phase_color = PHASE_COLORS.get(phase, "#b2bec3")
+                    phase_label = CFG_PHASE_LABELS.get(phase, phase)
+
+                    y_base = row_idx * row_height + 5
+
+                    # 阶段标签
+                    timeline_canvas.create_text(margin_left - 6, y_base + label_height + bar_height / 2,
+                                                text=phase_label, anchor=tk.E,
+                                                font=("Microsoft YaHei", 9, "bold"), fill=phase_color)
+                    # 阶段标签区域（左侧）
+                    label_rects.append((0, margin_left, y_base, y_base + row_height,
+                                        _build_phase_tooltip(phase, phase_label)))
+
+                    # 绘制转体步骤（透明色块，固定宽度）
+                    x = margin_left
+                    if y_rotation:
+                        rx_end = x + y_rotation_width
+                        timeline_canvas.create_rectangle(x, y_base + label_height, rx_end,
+                                                         y_base + label_height + bar_height,
+                                                         fill="", outline=THEME["border"], width=1, dash=(2, 2))
+                        timeline_canvas.create_text((x + rx_end) / 2, y_base + 6, text=y_rotation,
+                                                    font=("Consolas", 8, "bold"), fill=THEME["fg"])
+                        # 转体色块tooltip
+                        step_rects.append((x, rx_end, y_base + label_height,
+                                           y_base + label_height + bar_height,
+                                           f"{y_rotation}"))
+                        x = rx_end
+
+                    # 绘制每个步骤色块
+                    for i, move in enumerate(merged_moves):
+                        st_ms = merged_times[i]
+                        natural_w = max(min_block_width, st_ms * time_to_width_ratio)
+                        block_width = max(min_block_width, natural_w * scale_ratio)
+
+                        color = face_colors.get(move, face_colors.get(move[0], "#b2bec3"))
+
+                        x_end = x + block_width
+
+                        timeline_canvas.create_rectangle(x, y_base + label_height, x_end,
+                                                         y_base + label_height + bar_height,
+                                                         fill=color, outline="", width=0)
+
+                        mid_x = (x + x_end) / 2
+                        timeline_canvas.create_text(mid_x, y_base + 6, text=move,
+                                                    font=("Consolas", 11, "bold"), fill=color)
+
+                        # 色块tooltip：显示步骤时间
+                        step_time_s = st_ms / 1000.0
+                        step_rects.append((x, x_end, y_base + label_height,
+                                           y_base + label_height + bar_height,
+                                           f"{move}  {step_time_s:.3f}s"))
+
+                        x = x_end
+
+                    row_idx += 1
+
+            def _build_phase_tooltip(phase, phase_label):
+                ps = detail["phase_stats"].get(phase, {})
+                if ps:
+                    return (
+                        f"{phase_label}\n"
+                        f"步数: {ps.get('steps', 0)}\n"
+                        f"用时: {ps.get('time', 0):.2f}s\n"
+                        f"观察: {ps.get('observation_time', 0):.2f}s\n"
+                        f"卡顿: {ps.get('stutter_count', 0)}\n"
+                        f"废步: {ps.get('wasted_moves', 0)}\n"
+                        f"TPS: {ps.get('tps', 0):.1f}"
+                    )
+                return f"{phase_label}\n(无阶段数据)"
+
+            timeline_canvas.bind("<Configure>", _on_timeline_canvas_configure)
+
+            def _on_canvas_motion(event):
+                x, y = event.x, event.y
+                # 先检查阶段标签区域
+                for rx1, rx2, ry1, ry2, text in label_rects:
+                    if rx1 <= x <= rx2 and ry1 <= y <= ry2:
+                        _show_tooltip(event, text)
+                        return
+                # 再检查色块区域
+                for rx1, rx2, ry1, ry2, text in step_rects:
+                    if rx1 <= x <= rx2 and ry1 <= y <= ry2:
+                        _show_tooltip(event, text)
+                        return
+                _hide_tooltip()
+
+            def _on_canvas_leave(event):
+                _hide_tooltip()
+
+            timeline_canvas.bind("<Motion>", _on_canvas_motion)
+            timeline_canvas.bind("<Leave>", _on_canvas_leave)
+        else:
+            # 分析失败时显示原始solution
+            sol_text = tk.Text(solution_frame, font=("Consolas", 11), height=4, wrap=tk.WORD,
+                               bg=THEME["input_bg"], fg=THEME["fg"], relief="flat", borderwidth=0)
+            sol_text.insert("1.0", detail.get("solution", ""))
+            sol_text.config(state="disabled")
+            sol_text.pack(fill=tk.X, padx=(12, 0))
 
         btn_frame = tk.Frame(main_frame, bg=THEME["card_bg"])
         btn_frame.pack(fill=tk.X, pady=(8, 0))
@@ -2113,7 +2496,10 @@ class CFOPAnalyzerGUI:
     def _fill_multi_analysis(self, records: list):
         if self.analysis_mode_var.get() != '多组':
             self.analysis_mode_var.set('多组')
-            self._on_mode_change()
+            # 不调用 _on_mode_change()，因为它会加载之前保存的数据
+            # 直接创建多组输入UI，不加载旧数据
+            self._save_single_data()
+            self._create_multi_input_ui()
         else:
             if hasattr(self, 'multi_inputs') and self.multi_inputs:
                 for inp in self.multi_inputs:
@@ -2208,6 +2594,24 @@ class CFOPAnalyzerGUI:
                  bg=THEME["card_bg"], fg="#888",
                  font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=(16, 0))
 
+        # 数据库更新
+        db_header = ttk.Frame(tab)
+        db_header.pack(fill=tk.X, pady=(0, 2), padx=8)
+        ttk.Label(db_header, text="  💾 数据库维护", font=("Microsoft YaHei", 11, "bold"),
+                  foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
+
+        db_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=16, pady=16,
+                            highlightthickness=1, highlightbackground=THEME["border"])
+        db_frame.pack(fill=tk.X, padx=8, pady=(0, 12))
+
+        db_update_frame = tk.Frame(db_frame, bg=THEME["card_bg"])
+        db_update_frame.pack(fill=tk.X)
+        ttk.Button(db_update_frame, text="🔄 更新数据库", command=self._on_recalculate_db,
+                   style="Accent.TButton").pack(side=tk.LEFT)
+        tk.Label(db_update_frame, text="重新计算所有记录的分析结果（底色、步数、TPS、解法复盘等）",
+                 bg=THEME["card_bg"], fg="#888",
+                 font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=(16, 0))
+
     def _build_help_tab(self):
         tab = self._tab_help
 
@@ -2226,7 +2630,7 @@ class CFOPAnalyzerGUI:
 【快速开始】
 1. 在cstimer中打乱并还原您的魔方。
 2. 点击成绩列表中的还原时间，完整复制弹窗中的"打乱公式"和"回顾"中的内容到软件输入框。
-3. 配置硅基流动API Key 并选择合适的模型。
+3. 配置API Key 并选择合适的模型。
 4. 点击"AI分析"开始分析。
 5. 分析结果可以保存到本地。
 
@@ -2241,11 +2645,37 @@ class CFOPAnalyzerGUI:
 - 不同模型分析结果可能有较大差异，性能越高的模型分析结果越准确
 - 高性能模型推荐GLM系列，性价比模型推荐DeepSeek系列
 
-【功能特点】
-• 自动识别CFOP各阶段
-• 计算观察时间和执行时间
-• 定位卡顿点
-• 生成训练建议
+【功能说明】
+
+🏠 首页
+• 水平统计：展示PB、平均用时、TPS、各阶段详细统计（步数/用时/观察/卡顿/废步/TPS及标准差），以及优点和缺点TOP3标签
+• 智能训练：今日训练总结，包含统计文本、时间趋势折线图、时间分布直方图，支持AI总结和Ao12分析
+
+🔬 深度分析
+• 单组/多组模式：单组分析单次还原，多组分析最多20组还原并计算平均和波动度
+• 底色自动识别：无需手动选择底色，软件自动检测
+• 解法复盘：Canvas色块时间轴，按CFOP阶段分行显示，步骤宽度与时间成正比，鼠标悬停查看步骤详情和阶段统计
+• AI流式输出：实时显示AI推理过程和分析结果，支持Markdown格式渲染
+• 智能粘贴：开启后自动监控剪贴板，识别csTimer数据并填入输入框，支持去重检测
+
+📂 数据管理
+• 数据列表：展示还原记录，支持按时间/用时/步数/TPS排序，点击列标题切换升降序
+• 日期筛选：按日期范围筛选记录，支持"本月"快捷按钮
+• 多选分析：支持Ctrl/Shift多选记录，点击"分析选中项"直接跳转深度分析
+• 还原详情：双击记录查看详情，含解法复盘时间轴和优缺点标签
+• 数据导入：支持csTimer导出文件和CSV文件导入，带进度弹窗
+• 数据导出：导出为CSV文件
+
+⚙️ 设置
+• API Key配置：密钥加密存储，安全可靠
+• 模型选择：从API获取可用模型列表
+• 智能粘贴开关：控制剪贴板自动监控
+• 记忆模式开关：记录分析历史，提供对比参考和训练建议
+• 数据库更新：重新计算所有记录的分析结果
+
+👤 用户管理
+• 多用户支持：创建、编辑、删除用户，支持自定义头像
+• 成绩异常检测：分析时自动检测成绩偏差，偏差过大时提示确认或切换用户
 
 【交流反馈】
 • 交流QQ群：322267527"""
@@ -2259,13 +2689,16 @@ class CFOPAnalyzerGUI:
                               fg=THEME["accent"], bg=THEME["card_bg"])
         title_label.pack(pady=(0, 16))
 
-        text_widget = scrolledtext.ScrolledText(main_frame, width=60, height=25,
-                                                font=("Microsoft YaHei", 10),
-                                                bg=THEME["card_bg"],
-                                                fg=THEME["fg"],
-                                                relief="flat", borderwidth=0,
-                                                wrap=tk.WORD)
-        text_widget.pack(fill=tk.BOTH, expand=True)
+        text_widget = tk.Text(main_frame, width=60, height=25,
+                              font=("Microsoft YaHei", 10),
+                              bg=THEME["card_bg"],
+                              fg=THEME["fg"],
+                              relief="flat", borderwidth=0,
+                              wrap=tk.WORD, highlightthickness=0)
+        help_scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=text_widget.yview)
+        text_widget.configure(yscrollcommand=help_scrollbar.set)
+        help_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         text_widget.insert("1.0", guide_text)
         text_widget.config(state="disabled")
     
@@ -2367,10 +2800,9 @@ class CFOPAnalyzerGUI:
         
         for _ in range(5):
             self._add_multi_row()
-        
+
         self.mode_desc_label.config(text="多组模式：分析多组还原，计算平均、波动度等（底色自动识别）")
-        self._hide_timeline()
-    
+
     def _add_multi_row(self):
         if not hasattr(self, 'multi_rows_frame'):
             return
@@ -2457,15 +2889,7 @@ class CFOPAnalyzerGUI:
     def _update_multi_count(self):
         count = len(self.multi_inputs) if hasattr(self, 'multi_inputs') else 0
         self.multi_count_label.config(text=f"当前 {count} 组")
-    
-    def _show_timeline(self):
-        self.timeline_header.pack(fill=tk.X, pady=(0, 2), before=self.result_header)
-        self.timeline_frame.pack(fill=tk.X, pady=(0, 8), before=self.result_header)
-    
-    def _hide_timeline(self):
-        self.timeline_header.pack_forget()
-        self.timeline_frame.pack_forget()
-    
+
     def _on_mode_change(self, event=None):
         old_mode = '单组'
         if hasattr(self, 'multi_inputs') and self.multi_inputs:
@@ -2479,7 +2903,6 @@ class CFOPAnalyzerGUI:
         new_mode = self.analysis_mode_var.get()
         if new_mode == '单组':
             self._create_single_input_ui()
-            self._show_timeline()
             self._load_single_data()
         else:
             self._create_multi_input_ui()
@@ -2577,11 +3000,9 @@ class CFOPAnalyzerGUI:
         mode = self.analysis_mode_var.get()
         if mode == '多组':
             self._create_multi_input_ui()
-            self._hide_timeline()
             self._load_multi_data()
         else:
             self._create_single_input_ui()
-            self._show_timeline()
             self._load_single_data()
     
     def _save_current_config(self):
@@ -2628,7 +3049,7 @@ class CFOPAnalyzerGUI:
     def _clear(self):
         log.info("清空输入")
         mode = self.analysis_mode_var.get()
-        
+
         if mode == '单组':
             self.scramble_entry.delete(0, tk.END)
             self.solution_text.delete(0, tk.END)
@@ -2636,9 +3057,309 @@ class CFOPAnalyzerGUI:
             for inp in self.multi_inputs:
                 inp['scramble'].delete(0, tk.END)
                 inp['solution'].delete(0, tk.END)
-        
+
+        for w in self.replay_canvas_container.winfo_children():
+            w.destroy()
         self.result_text.delete(1.0, tk.END)
-        self.timeline_canvas.delete("all")
+        self._solution_summary = ""
+        if hasattr(self, '_replay_analyzers'):
+            self._replay_analyzers = []
+
+    def _draw_replay_timeline(self):
+        """在深度分析的解法复盘区域绘制色块时间轴"""
+        from analyzer import CFOPAnalyzer, PHASE_ORDER, COLOR_NAMES
+        from config import PHASE_COLORS, PHASE_LABELS as CFG_PHASE_LABELS
+
+        # 清空容器
+        for w in self.replay_canvas_container.winfo_children():
+            w.destroy()
+
+        if not self._replay_analyzers:
+            return
+
+        face_colors = {
+            'U': "#0984e3", "U'": "#74b9ff", "U2": "#0984e3",
+            'D': "#00b894", "D'": "#55efc4", "D2": "#00b894",
+            'F': "#e17055", "F'": "#fab1a0", "F2": "#e17055",
+            'R': "#fd79a8", "R'": "#fdcb6e", "R2": "#fd79a8",
+            'B': "#6c5ce7", "B'": "#a29bfe", "B2": "#6c5ce7",
+            'L': "#fdcb6e", "L'": "#ffeaa7", "L2": "#fdcb6e",
+            'M': "#e84393", "M'": "#fd79a8", "M2": "#e84393",
+            'E': "#00cec9", "E'": "#81ecec", "E2": "#00cec9",
+            'S': "#d63031", "S'": "#ff7675", "S2": "#d63031",
+        }
+
+        min_block_width = 12
+        y_rotation_width = 16
+        bar_height = 18
+        label_height = 16
+        row_height = bar_height + label_height + 10
+        margin_left = 50
+        margin_right = 20
+
+        # 使用ScrolledCanvas支持多组时滚动
+        outer_frame = tk.Frame(self.replay_canvas_container, bg=THEME["card_bg"])
+        outer_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 先计算总高度
+        total_canvas_height = 0
+        for group_idx, (analyzer, scramble, bottom_name) in enumerate(self._replay_analyzers):
+            processed = analyzer.generate_processed_solve()
+            parsed = CFOPAnalyzer.parse_processed_solve(processed)
+            phase_data = parsed.get("phases", parsed)
+            num_rows = sum(1 for p in PHASE_ORDER if phase_data.get(p) and phase_data[p].get("moves"))
+            group_header_height = 40 if len(self._replay_analyzers) > 1 else 25
+            total_canvas_height += num_rows * row_height + 10 + group_header_height
+
+        scroll_canvas = tk.Canvas(outer_frame, bg=THEME["card_bg"], highlightthickness=0,
+                                  height=min(total_canvas_height, 180))
+        scrollbar = ttk.Scrollbar(outer_frame, orient=tk.VERTICAL, command=scroll_canvas.yview)
+        scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        inner_frame = tk.Frame(scroll_canvas, bg=THEME["card_bg"])
+        scroll_canvas.create_window((0, 0), window=inner_frame, anchor="nw")
+
+        # 为每组analyzer绘制时间轴
+        for group_idx, (analyzer, scramble, bottom_name) in enumerate(self._replay_analyzers):
+            group_frame = tk.Frame(inner_frame, bg=THEME["card_bg"])
+            group_frame.pack(fill=tk.X, padx=(0, 8), pady=(4, 8))
+
+            # 显示完整信息：打乱、用时、步数、TPS、底色、前色
+            front_desc = get_orientation_desc(analyzer.top_color, analyzer.front_color)
+            total_time = analyzer.get_total_time()
+            stats = analyzer.get_phase_stats()
+            total_steps = sum(ps.get("steps", 0) for ps in stats.values())
+            total_tps = total_steps / total_time if total_time > 0 else 0
+
+            if len(self._replay_analyzers) > 1:
+                header_line1 = f"第 {group_idx + 1} 组"
+            else:
+                header_line1 = ""
+            header_line1 += f"  打乱: {scramble}" if scramble else ""
+            if header_line1:
+                tk.Label(group_frame, text=header_line1, font=("Consolas", 10),
+                         bg=THEME["card_bg"], fg=THEME["fg"]).pack(anchor="w", pady=(0, 1))
+
+            header_line2 = f"用时: {total_time:.2f}s  步数: {total_steps}  TPS: {total_tps:.1f}  底色: {bottom_name}  前色: {front_desc}"
+            tk.Label(group_frame, text=header_line2, font=("Microsoft YaHei", 9),
+                     bg=THEME["card_bg"], fg=THEME["fg"]).pack(anchor="w", pady=(0, 2))
+
+            # 解析processed_solve
+            processed = analyzer.generate_processed_solve()
+            parsed = CFOPAnalyzer.parse_processed_solve(processed)
+            phase_data = parsed.get("phases", parsed)
+
+            # 计算每步时间间隔
+            phase_step_data = {}
+            for phase in PHASE_ORDER:
+                pd = phase_data.get(phase)
+                if not pd or not pd.get("moves"):
+                    continue
+                moves = pd["moves"]
+                y_rotation = pd.get("y_rotation", "")
+                step_times = []
+                for i, (move, ts) in enumerate(moves):
+                    if i + 1 < len(moves):
+                        step_times.append(moves[i + 1][1] - ts)
+                    else:
+                        if len(step_times) > 0:
+                            step_times.append(sum(step_times) / len(step_times))
+                        else:
+                            step_times.append(100)
+                merged_moves = [m for m, _ in moves]
+                merged_times = step_times
+                total_ms = sum(merged_times)
+                phase_step_data[phase] = (merged_moves, y_rotation, merged_times, total_ms)
+
+            min_step_time = float('inf')
+            for phase in PHASE_ORDER:
+                if phase not in phase_step_data:
+                    continue
+                _, _, merged_times, _ = phase_step_data[phase]
+                for t in merged_times:
+                    if t > 0 and t < min_step_time:
+                        min_step_time = t
+            if min_step_time == float('inf'):
+                min_step_time = 100
+
+            time_to_width_ratio = min_block_width / min_step_time
+            row_natural_widths = {}
+            for phase in PHASE_ORDER:
+                if phase not in phase_step_data:
+                    continue
+                _, y_rotation, merged_times, _ = phase_step_data[phase]
+                natural_w = sum(max(min_block_width, t * time_to_width_ratio) for t in merged_times)
+                if y_rotation:
+                    natural_w += y_rotation_width
+                row_natural_widths[phase] = natural_w
+
+            max_natural_width = max(row_natural_widths.values()) if row_natural_widths else 0
+            total_rows = sum(1 for p in PHASE_ORDER if p in phase_step_data)
+            canvas_height = total_rows * row_height + 10
+
+            timeline_canvas = tk.Canvas(group_frame, height=canvas_height,
+                                        bg=THEME["card_bg"], highlightthickness=0)
+            timeline_canvas.pack(fill=tk.BOTH, expand=True)
+
+            # tooltip
+            tooltip_win = [None]
+            tooltip_text = [None]
+            step_rects = []
+            label_rects = []
+
+            def _show_tooltip(event, text):
+                if tooltip_text[0] == text and tooltip_win[0]:
+                    tooltip_win[0].wm_geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
+                    return
+                _hide_tooltip()
+                tw = tk.Toplevel(timeline_canvas)
+                tw.wm_overrideredirect(True)
+                tw.wm_attributes("-topmost", True)
+                tw.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
+                lbl = tk.Label(tw, text=text, font=("Microsoft YaHei", 9),
+                               bg="#ffffdd", fg="#333333", relief="solid", borderwidth=1,
+                               padx=6, pady=4, justify="left")
+                lbl.pack()
+                tooltip_win[0] = tw
+                tooltip_text[0] = text
+
+            def _hide_tooltip():
+                if tooltip_win[0]:
+                    tooltip_win[0].destroy()
+                    tooltip_win[0] = None
+                tooltip_text[0] = None
+
+            def _build_phase_tooltip(phase_key, phase_label):
+                stats = analyzer.get_phase_stats()
+                ps = stats.get(phase_key, {})
+                if ps:
+                    return (
+                        f"{phase_label}\n"
+                        f"步数: {ps.get('steps', 0)}\n"
+                        f"用时: {ps.get('time', 0):.2f}s\n"
+                        f"观察: {ps.get('observation_time', 0):.2f}s\n"
+                        f"卡顿: {ps.get('stutter_count', 0)}\n"
+                        f"废步: {ps.get('wasted_moves', 0)}\n"
+                        f"TPS: {ps.get('tps', 0):.1f}"
+                    )
+                return f"{phase_label}\n(无阶段数据)"
+
+            def _on_configure(event, tc=timeline_canvas, psd=phase_step_data,
+                              rnw=row_natural_widths, mnw=max_natural_width,
+                              sr=step_rects, lr=label_rects):
+                available_width = event.width - margin_left - margin_right
+                if available_width <= 0:
+                    return
+                scale_ratio = available_width / mnw if mnw > 0 else 1
+
+                if scale_ratio < 1:
+                    max_actual_width = 0
+                    for phase in PHASE_ORDER:
+                        if phase not in psd:
+                            continue
+                        _, y_rotation, merged_times, _ = psd[phase]
+                        actual_w = sum(max(min_block_width, max(min_block_width, t * time_to_width_ratio) * scale_ratio) for t in merged_times)
+                        if y_rotation:
+                            actual_w += y_rotation_width
+                        max_actual_width = max(max_actual_width, actual_w)
+                    if max_actual_width > available_width and max_actual_width > 0:
+                        scale_ratio *= available_width / max_actual_width
+
+                tc.delete("all")
+                sr.clear()
+                lr.clear()
+
+                row_idx = 0
+                for phase in PHASE_ORDER:
+                    if phase not in psd:
+                        continue
+                    merged_moves, y_rotation, merged_times, total_ms = psd[phase]
+                    phase_color = PHASE_COLORS.get(phase, "#b2bec3")
+                    phase_label = CFG_PHASE_LABELS.get(phase, phase)
+
+                    y_base = row_idx * row_height + 5
+
+                    # 阶段标签
+                    tc.create_text(margin_left - 6, y_base + label_height + bar_height / 2,
+                                   text=phase_label, anchor=tk.E,
+                                   font=("Microsoft YaHei", 9, "bold"), fill=phase_color)
+                    lr.append((0, margin_left, y_base, y_base + row_height,
+                               _build_phase_tooltip(phase, phase_label)))
+
+                    x = margin_left
+                    if y_rotation:
+                        rx_end = x + y_rotation_width
+                        tc.create_rectangle(x, y_base + label_height, rx_end,
+                                            y_base + label_height + bar_height,
+                                            fill="", outline=THEME["border"], width=1, dash=(2, 2))
+                        tc.create_text((x + rx_end) / 2, y_base + 6, text=y_rotation,
+                                       font=("Consolas", 8, "bold"), fill=THEME["fg"])
+                        sr.append((x, rx_end, y_base + label_height,
+                                   y_base + label_height + bar_height, f"{y_rotation}"))
+                        x = rx_end
+
+                    for i, move in enumerate(merged_moves):
+                        st_ms = merged_times[i]
+                        natural_w = max(min_block_width, st_ms * time_to_width_ratio)
+                        block_width = max(min_block_width, natural_w * scale_ratio)
+                        color = face_colors.get(move, face_colors.get(move[0], "#b2bec3"))
+                        x_end = x + block_width
+
+                        tc.create_rectangle(x, y_base + label_height, x_end,
+                                            y_base + label_height + bar_height,
+                                            fill=color, outline="", width=0)
+                        mid_x = (x + x_end) / 2
+                        tc.create_text(mid_x, y_base + 6, text=move,
+                                       font=("Consolas", 11, "bold"), fill=color)
+
+                        step_time_s = st_ms / 1000.0
+                        sr.append((x, x_end, y_base + label_height,
+                                   y_base + label_height + bar_height,
+                                   f"{move}  {step_time_s:.3f}s"))
+                        x = x_end
+
+                    row_idx += 1
+
+            timeline_canvas.bind("<Configure>", _on_configure)
+
+            def _on_motion(event, sr=step_rects, lr=label_rects):
+                x, y = event.x, event.y
+                for rx1, rx2, ry1, ry2, text in lr:
+                    if rx1 <= x <= rx2 and ry1 <= y <= ry2:
+                        _show_tooltip(event, text)
+                        return
+                for rx1, rx2, ry1, ry2, text in sr:
+                    if rx1 <= x <= rx2 and ry1 <= y <= ry2:
+                        _show_tooltip(event, text)
+                        return
+                _hide_tooltip()
+
+            def _on_leave(event):
+                _hide_tooltip()
+
+            timeline_canvas.bind("<Motion>", _on_motion)
+            timeline_canvas.bind("<Leave>", _on_leave)
+
+        # 更新滚动区域
+        inner_frame.update_idletasks()
+        scroll_canvas.configure(scrollregion=scroll_canvas.bbox("all"))
+
+        # 鼠标滚轮支持
+        def _on_replay_mousewheel(event):
+            scroll_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        scroll_canvas.bind("<MouseWheel>", _on_replay_mousewheel)
+        outer_frame.bind("<MouseWheel>", _on_replay_mousewheel)
+        inner_frame.bind("<MouseWheel>", _on_replay_mousewheel)
+        # 为inner_frame的所有子控件绑定滚轮
+        def _bind_mousewheel_recursive(widget):
+            widget.bind("<MouseWheel>", _on_replay_mousewheel)
+            for child in widget.winfo_children():
+                _bind_mousewheel_recursive(child)
+        # 延迟绑定，等子控件创建完成
+        self.replay_canvas_container.after(100, lambda: _bind_mousewheel_recursive(inner_frame))
     
     def _refresh_models(self):
         api_key = self.api_key_entry.get().strip()
@@ -2676,84 +3397,6 @@ class CFOPAnalyzerGUI:
         else:
             log.warning("未获取到任何模型")
             messagebox.showwarning("警告", "未获取到任何模型")
-    
-    def _on_canvas_resize(self, event):
-        if self._last_analyzer is not None:
-            self._draw_timeline(self._last_analyzer)
-    
-    def _draw_timeline(self, analyzer: CFOPAnalyzer):
-        self.timeline_canvas.delete("all")
-        timestamps = analyzer.phase_timestamps
-        if not timestamps:
-            return
-        
-        canvas_width = self.timeline_canvas.winfo_width()
-        if canvas_width < 100:
-            canvas_width = 720
-        
-        margin_left = 40
-        margin_right = 20
-        bar_y = 30
-        bar_height = 28
-        axis_y = bar_y + bar_height + 8
-        draw_width = canvas_width - margin_left - margin_right
-        
-        all_times = []
-        for phase in PHASE_ORDER:
-            if phase in timestamps:
-                all_times.extend([timestamps[phase]["start"], timestamps[phase]["end"]])
-        if not all_times:
-            return
-        
-        time_min = min(all_times)
-        time_max = max(all_times)
-        if time_max == time_min:
-            time_max = time_min + 1
-        
-        def time_to_x(t):
-            return margin_left + (t - time_min) / (time_max - time_min) * draw_width
-        
-        continuous_start = None
-        for phase in PHASE_ORDER:
-            if phase in timestamps and timestamps[phase]["end"] > timestamps[phase]["start"]:
-                if continuous_start is None:
-                    continuous_start = timestamps[phase]["start"]
-                
-                x_start = time_to_x(continuous_start)
-                x_end = time_to_x(timestamps[phase]["end"])
-                color = PHASE_COLORS.get(phase, "#b2bec3")
-                label = PHASE_LABELS.get(phase, phase)
-                total_duration_s = (timestamps[phase]["end"] - continuous_start) / 1000.0
-                
-                self.timeline_canvas.create_rectangle(x_start, bar_y, x_end, bar_y + bar_height,
-                                                       fill=color, outline="", width=0)
-                mid_x = (x_start + x_end) / 2
-                
-                if (x_end - x_start) > 25:
-                    self.timeline_canvas.create_text(mid_x, bar_y - 10, text=label,
-                                                      font=("Microsoft YaHei", 8, "bold"), fill=color)
-                
-                time_text = f"{total_duration_s:.2f}s"
-                if (x_end - x_start) > 45:
-                    self.timeline_canvas.create_text(mid_x, bar_y + bar_height / 2,
-                                                      text=time_text,
-                                                      font=("Consolas", 8, "bold"), fill="white")
-                else:
-                    self.timeline_canvas.create_text(x_end + 4, bar_y + bar_height / 2,
-                                                      text=time_text, anchor=tk.W,
-                                                      font=("Consolas", 8), fill=color)
-                
-                continuous_start = timestamps[phase]["end"]
-        
-        self.timeline_canvas.create_line(margin_left, axis_y, canvas_width - margin_right, axis_y,
-                                          fill=THEME["border"], width=1)
-        tick_count = 8
-        for i in range(tick_count + 1):
-            t = time_min + (time_max - time_min) * i / tick_count
-            x = time_to_x(t)
-            self.timeline_canvas.create_line(x, axis_y, x, axis_y + 4, fill=THEME["border"], width=1)
-            self.timeline_canvas.create_text(x, axis_y + 14, text=f"{t / 1000:.1f}s",
-                                              font=("Consolas", 8), fill="#636e72")
     
     def _stop_analyze(self):
         log.info("停止AI分析")
@@ -2831,10 +3474,21 @@ class CFOPAnalyzerGUI:
                 log.debug(f"重置UI状态异常: {ex}")
     
     def _save_result(self):
-        content = self.result_text.get("1.0", tk.END).strip()
-        if not content:
+        # 保存内容包含解法复盘和AI分析报告
+        replay_content = self._solution_summary if self._solution_summary else ""
+        ai_content = self.result_text.get("1.0", tk.END).strip()
+        if not replay_content and not ai_content:
             messagebox.showwarning("警告", "没有可保存的分析结果！")
             return
+
+        content_parts = []
+        if replay_content:
+            content_parts.append(replay_content)
+        if ai_content:
+            if content_parts:
+                content_parts.append("\n\n---\n")
+            content_parts.append(ai_content)
+        content = "".join(content_parts)
         
         os.makedirs(RESULT_DIR, exist_ok=True)
         
@@ -2842,11 +3496,11 @@ class CFOPAnalyzerGUI:
         mode = self.analysis_mode_var.get()
         username = self._current_username or "unknown"
         
-        if mode == '单组' and self._last_analyzer:
+        if mode == '单组' and hasattr(self, '_current_analyzer') and self._current_analyzer:
             date_str = datetime.now().strftime("%Y%m%d_%H%M%S")
             try:
                 scramble = self.scramble_entry.get().strip().replace(" ", "")
-                total_time = self._last_analyzer.get_total_time()
+                total_time = self._current_analyzer.get_total_time()
                 default_name = f"{username}_{date_str}_{scramble}_{total_time:.1f}s"
             except Exception:
                 pass
@@ -2972,8 +3626,7 @@ class CFOPAnalyzerGUI:
             
             log.info(f"AI分析System提示词:\n{system_prompt}")
             log.info(f"AI分析User提示词:\n{user_prompt}")
-            self._draw_timeline(analyzer)
-            self._last_analyzer = analyzer
+            self._current_analyzer = analyzer
         except Exception as e:
             log.error(f"构建分析数据失败: {str(e)}")
             self._reset_analysis_ui()
@@ -2983,6 +3636,9 @@ class CFOPAnalyzerGUI:
         self._stream_stop = False
         self._stream_buffer = ""
         self._reasoning_buffer = ""
+        # 清空旧的解法复盘
+        for w in self.replay_canvas_container.winfo_children():
+            w.destroy()
         scramble = self.scramble_entry.get().strip()
         self._solution_summary = (
             f"【解法复盘】\n\n"
@@ -2990,6 +3646,7 @@ class CFOPAnalyzerGUI:
             f"【底色】:{bottom_name} | 【自动朝向】:{get_orientation_desc(analyzer.top_color, analyzer.front_color)}\n"
             + analyzer.format_output()
         )
+        self._replay_analyzers = [(analyzer, scramble, bottom_name)]
         self._count_consumed = False
         self.ai_analyze_btn.config(state="disabled")
         self.stop_btn.config(state="normal")
@@ -3054,25 +3711,28 @@ class CFOPAnalyzerGUI:
         self._render_buffer()
     
     def _render_buffer(self):
+        # 解法复盘显示到Canvas时间轴（只绘制一次）
+        if self._solution_summary and hasattr(self, '_replay_analyzers') and self._replay_analyzers:
+            if not self.replay_canvas_container.winfo_children():
+                self._draw_replay_timeline()
+
+        # AI分析结果显示
         is_at_bottom = self._is_scroll_at_bottom()
-        
+
         if not is_at_bottom:
             scroll_pos = self.result_text.yview()
-        
+
         self.result_text.config(state="normal")
         self.result_text.delete("1.0", tk.END)
-        
+
         if self._stream_buffer:
-            if self._solution_summary:
-                self.result_text.insert(tk.END, self._solution_summary, "normal")
-                self.result_text.insert(tk.END, "\n\n", "normal")
             display_text = self._format_tags_in_report(self._stream_buffer)
             render_markdown(self.result_text, display_text)
         elif self._reasoning_buffer:
             self.result_text.insert(tk.END, "🤔 AI思考中...\n\n", "italic")
             thinking_preview = self._reasoning_buffer[-500:] if len(self._reasoning_buffer) > 500 else self._reasoning_buffer
             self.result_text.insert(tk.END, thinking_preview, "normal")
-        
+
         if is_at_bottom:
             self.result_text.see(tk.END)
         else:
@@ -3091,6 +3751,10 @@ class CFOPAnalyzerGUI:
     def _on_stream_done(self):
         log.info("AI分析完成")
         self._render_pending = False
+        # 在AI输出末尾追加模型来源
+        model = self.model_var.get()
+        if model and self._stream_buffer:
+            self._stream_buffer += f"\n\n---\n内容来自{model}模型"
         self._render_buffer()
         self.ai_analyze_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
@@ -3420,9 +4084,9 @@ class CFOPAnalyzerGUI:
         try:
             # 无论是否启用记忆保存，都要更新已有记录的标签
             if mode == '单组':
-                if not hasattr(self, '_last_analyzer') or not self._last_analyzer:
+                if not hasattr(self, '_current_analyzer') or not self._current_analyzer:
                     return
-                analyzer = self._last_analyzer
+                analyzer = self._current_analyzer
                 scramble_text = self.scramble_entry.get().strip() if hasattr(self, 'scramble_entry') else ""
                 solution_text = self.solution_text.get().strip() if hasattr(self, 'solution_text') else ""
                 total_time = analyzer.get_total_time()
@@ -3448,7 +4112,13 @@ class CFOPAnalyzerGUI:
                     return
                 stats = analyzer.get_phase_stats()
                 bottom_name = COLOR_NAMES.get(analyzer.bottom_color, "白")
-                record_id = memory_db.save_record(scramble_text, solution_text, total_time, bottom_name, stats)
+                total_steps = sum(s.get("steps", 0) for s in stats.values())
+                total_time = analyzer.get_total_time()
+                total_tps = total_steps / total_time if total_time > 0 else 0
+                processed_solve = analyzer.generate_processed_solve()
+                record_id = memory_db.save_record(scramble_text, solution_text, total_time, bottom_name, stats,
+                                                  total_steps=total_steps, total_tps=total_tps,
+                                                  processed_solve=processed_solve)
                 if record_id == 0:
                     record_id = memory_db.find_record_id(scramble_text, solution_text, total_time)
                 # 新记录也需要写入标签
@@ -3484,8 +4154,13 @@ class CFOPAnalyzerGUI:
                 for idx, (g, analyzer) in enumerate(self._last_multi_data):
                     stats = analyzer.get_phase_stats()
                     total_time = analyzer.get_total_time()
+                    total_steps = sum(s.get("steps", 0) for s in stats.values())
+                    total_tps = total_steps / total_time if total_time > 0 else 0
                     bottom_name = g.get('bottom_name', COLOR_NAMES.get(analyzer.bottom_color, "白"))
-                    record_id = memory_db.save_record(g['scramble'], g['solution'], total_time, bottom_name, stats)
+                    processed_solve = analyzer.generate_processed_solve()
+                    record_id = memory_db.save_record(g['scramble'], g['solution'], total_time, bottom_name, stats,
+                                                      total_steps=total_steps, total_tps=total_tps,
+                                                      processed_solve=processed_solve)
                     if record_id == 0:
                         record_id = memory_db.find_record_id(g['scramble'], g['solution'], total_time)
                     # 新记录也需要写入标签
@@ -3559,7 +4234,7 @@ class CFOPAnalyzerGUI:
                                   foreground="#b2bec3", lmargin1=20, lmargin2=20)
         report_text.tag_configure("step_status", font=("Microsoft YaHei", 11, "bold"),
                                   foreground=THEME["accent"])
-        scroll = tk.Scrollbar(text_frame, command=report_text.yview, width=10)
+        scroll = ttk.Scrollbar(text_frame, orient=tk.VERTICAL, command=report_text.yview)
         report_text.config(yscrollcommand=scroll.set)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         report_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -3894,13 +4569,19 @@ class CFOPAnalyzerGUI:
                     report_text.insert(tk.END, line + "\n", "normal")
             report_text.insert(tk.END, "\n🤖 AI 总结\n", "section")
             report_text.insert(tk.END, result + "\n", "ai_summary")
+            if model:
+                report_text.insert(tk.END, f"\n---\n内容来自{model}模型\n", "normal")
 
             if best_analysis:
                 report_text.insert(tk.END, "\n🏆 最佳Ao12 AI分析\n", "section")
                 report_text.insert(tk.END, best_analysis + "\n", "ai_summary")
+                if model:
+                    report_text.insert(tk.END, f"\n---\n内容来自{model}模型\n", "normal")
             if worst_analysis:
                 report_text.insert(tk.END, "\n📉 最差Ao12 AI分析\n", "section")
                 report_text.insert(tk.END, worst_analysis + "\n", "ai_summary")
+                if model:
+                    report_text.insert(tk.END, f"\n---\n内容来自{model}模型\n", "normal")
 
             report_text.config(state="disabled")
             report_text.see(tk.END)
@@ -4021,6 +4702,9 @@ class CFOPAnalyzerGUI:
         self._stream_buffer = ""
         self._reasoning_buffer = ""
         self._solution_summary = ""
+        # 清空旧的解法复盘
+        for w in self.replay_canvas_container.winfo_children():
+            w.destroy()
         self._count_consumed = False
         
         self.ai_analyze_btn.config(state="disabled")
@@ -4069,6 +4753,7 @@ class CFOPAnalyzerGUI:
                 summary_lines.append("\n")
             
             self._solution_summary = "".join(summary_lines)
+            self._replay_analyzers = [(a, g['scramble'], g['bottom_name']) for a, g in zip(analyzers, groups_data)]
         
         self._start_ai_status_animation("thinking")
         
