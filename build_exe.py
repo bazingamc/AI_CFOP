@@ -159,6 +159,25 @@ def build_exe():
             results_dir = os.path.join(dist_dir, "results")
             os.makedirs(results_dir, exist_ok=True)
             print(f"✓ 创建结果目录: results/")
+
+            # 复制png目录（OLL/PLL图片、头像等）
+            src_png = os.path.join(os.path.dirname(os.path.abspath(__file__)), "png")
+            dst_png = os.path.join(dist_dir, "png")
+            if os.path.isdir(src_png):
+                if os.path.exists(dst_png):
+                    shutil.rmtree(dst_png)
+                shutil.copytree(src_png, dst_png)
+                print(f"✓ 复制图片目录: png/")
+            else:
+                os.makedirs(os.path.join(dist_dir, "png", "avatars"), exist_ok=True)
+                print(f"✓ 创建图片目录: png/")
+
+            # 复制default_avatar.png
+            src_avatar = os.path.join(os.path.dirname(os.path.abspath(__file__)), "default_avatar.png")
+            dst_avatar = os.path.join(dist_dir, "default_avatar.png")
+            if os.path.isfile(src_avatar):
+                shutil.copy2(src_avatar, dst_avatar)
+                print(f"✓ 复制默认头像: default_avatar.png")
             
             total_size = 0
             for root, dirs, files in os.walk(dist_dir):

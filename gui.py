@@ -15,7 +15,7 @@ from config import (
     THEME, HELP_TEXTS, PHASE_COLORS, PHASE_LABELS,
     ORIENTATION_OPTIONS, PHASE_ORDER,
     BOTTOM_COLOR_NAMES, BOTTOM_COLOR_OPTIONS, OPPOSITE_COLORS, COLOR_NAMES,
-    RESULT_DIR, SILICONFLOW_BASE_URL
+    RESULT_DIR, SILICONFLOW_BASE_URL, APP_DIR
 )
 
 from analyzer import CFOPAnalyzer
@@ -35,6 +35,22 @@ def set_logger(logger):
 
 class CFOPAnalyzerGUI:
     """CFOP分析器的主GUI应用"""
+
+    @staticmethod
+    def _resolve_avatar_path(avatar_path: str) -> str:
+        """将头像路径解析为绝对路径，支持相对路径（png/avatars/...）和绝对路径"""
+        if not avatar_path:
+            return ""
+        if os.path.isabs(avatar_path):
+            return avatar_path
+        # 相对路径，基于APP_DIR解析
+        abs_path = os.path.join(APP_DIR, avatar_path)
+        if os.path.isfile(abs_path):
+            return abs_path
+        # 兼容旧的绝对路径
+        if os.path.isfile(avatar_path):
+            return avatar_path
+        return abs_path
 
     def __init__(self, root):
         self.root = root
@@ -170,7 +186,7 @@ class CFOPAnalyzerGUI:
                 row = tk.Frame(scroll_frame, bg=THEME["card_bg"], pady=6)
                 row.pack(fill=tk.X, padx=8)
 
-                avatar_path = u.get("avatar", "")
+                avatar_path = self._resolve_avatar_path(u.get("avatar", ""))
                 if avatar_path and os.path.isfile(avatar_path):
                     try:
                         from PIL import Image as PILImage, ImageTk
@@ -372,7 +388,7 @@ class CFOPAnalyzerGUI:
                 row = tk.Frame(scroll_frame, bg=THEME["card_bg"], pady=4)
                 row.pack(fill=tk.X, padx=4, pady=2)
 
-                avatar_path = u.get("avatar", "")
+                avatar_path = self._resolve_avatar_path(u.get("avatar", ""))
                 if avatar_path and os.path.isfile(avatar_path):
                     try:
                         from PIL import Image as PILImage, ImageTk
@@ -483,7 +499,7 @@ class CFOPAnalyzerGUI:
         avatar_preview_frame.grid(row=2, column=1, columnspan=2, sticky=tk.W, pady=8, padx=(8, 0))
 
         user_info = user_manager.get_user(user_id)
-        current_avatar = user_info.get("avatar", "") if user_info else ""
+        current_avatar = self._resolve_avatar_path(user_info.get("avatar", "")) if user_info else ""
         avatar_preview = tk.Canvas(avatar_preview_frame, width=48, height=48,
                                     highlightthickness=1, highlightbackground=THEME["border"],
                                     bg=THEME["card_bg"], cursor="hand2")
@@ -533,7 +549,19 @@ class CFOPAnalyzerGUI:
             dialog.lift()
             dialog.grab_set()
             if path:
-                new_avatar_path[0] = path
+                # 复制头像到png/avatars目录
+                avatar_dir = os.path.join(APP_DIR, "png", "avatars")
+                os.makedirs(avatar_dir, exist_ok=True)
+                ext = os.path.splitext(path)[1] or ".png"
+                import shutil
+                dest_name = f"user_{user_id}{ext}"
+                dest_path = os.path.join(avatar_dir, dest_name)
+                try:
+                    shutil.copy2(path, dest_path)
+                    # 存储相对路径 png/avatars/user_X.png
+                    new_avatar_path[0] = os.path.join("png", "avatars", dest_name)
+                except Exception:
+                    new_avatar_path[0] = path
                 _update_avatar_preview(path)
 
         avatar_preview.bind("<Button-1>", lambda e: _choose_avatar())
@@ -632,7 +660,7 @@ class CFOPAnalyzerGUI:
             self._user_avatar_canvas.delete("all")
             default_path = user_manager.get_default_avatar_path()
             user_info = user_manager.get_user(self._current_user_id) if self._current_user_id else None
-            avatar_path = user_info.get("avatar", "") if user_info else ""
+            avatar_path = self._resolve_avatar_path(user_info.get("avatar", "")) if user_info else ""
             if avatar_path and os.path.isfile(avatar_path):
                 try:
                     from PIL import Image as PILImage, ImageTk
@@ -1516,18 +1544,21 @@ class CFOPAnalyzerGUI:
         self._notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
         self._tab_home = ttk.Frame(self._notebook)
+        self._tab_training = ttk.Frame(self._notebook)
         self._tab_analysis = ttk.Frame(self._notebook)
         self._tab_data = ttk.Frame(self._notebook)
         self._tab_settings = ttk.Frame(self._notebook)
         self._tab_help = ttk.Frame(self._notebook)
 
         self._notebook.add(self._tab_home, text="  🏠 首页  ")
+        self._notebook.add(self._tab_training, text="  🎯 智能训练  ")
         self._notebook.add(self._tab_analysis, text="  🔬 深度分析  ")
         self._notebook.add(self._tab_data, text="  📂 数据管理  ")
         self._notebook.add(self._tab_settings, text="  ⚙️ 设置  ")
         self._notebook.add(self._tab_help, text="  ❓ 帮助  ")
 
         self._build_home_tab()
+        self._build_training_tab()
         self._build_analysis_tab()
         self._build_data_tab()
         self._build_settings_tab()
@@ -1565,8 +1596,13 @@ class CFOPAnalyzerGUI:
         self._home_stats_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
         self._home_stats_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
+        self._refresh_home_stats()
+
+    def _build_training_tab(self):
+        tab = self._tab_training
+
         train_header = ttk.Frame(tab)
-        train_header.pack(fill=tk.X, pady=(0, 2), padx=8)
+        train_header.pack(fill=tk.X, pady=(8, 2), padx=8)
         ttk.Label(train_header, text="  🎯 智能训练", font=("Microsoft YaHei", 11, "bold"),
                   foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
 
@@ -1576,8 +1612,10 @@ class CFOPAnalyzerGUI:
 
         ttk.Button(train_frame, text="📊 今日训练总结", command=self._show_daily_report,
                    style="Accent.TButton").pack(side=tk.LEFT)
-
-        self._refresh_home_stats()
+        ttk.Button(train_frame, text="📈 OLL统计", command=self._show_oll_stats,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=(12, 0))
+        ttk.Button(train_frame, text="📈 PLL统计", command=self._show_pll_stats,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=(12, 0))
 
     def _refresh_home_stats(self):
         from config import PHASE_ORDER
@@ -4626,7 +4664,188 @@ class CFOPAnalyzerGUI:
 
         ttk.Button(btn_frame, text="关闭", command=win.destroy,
                    style="Secondary.TButton").pack(side=tk.RIGHT)
-    
+
+    def _show_oll_stats(self):
+        stats = memory_db.get_oll_pll_stats()
+        oll_data = stats.get("oll", {})
+        if not oll_data:
+            messagebox.showinfo("OLL统计", "暂无OLL统计数据，请先完成还原分析。")
+            return
+        self._show_op_stats_dialog("OLL统计", oll_data, "oll")
+
+    def _show_pll_stats(self):
+        stats = memory_db.get_oll_pll_stats()
+        pll_data = stats.get("pll", {})
+        if not pll_data:
+            messagebox.showinfo("PLL统计", "暂无PLL统计数据，请先完成还原分析。")
+            return
+        self._show_op_stats_dialog("PLL统计", pll_data, "pll")
+
+    def _show_op_stats_dialog(self, title: str, data: dict, op_type: str):
+        """显示OLL/PLL统计弹窗
+
+        Args:
+            title: 弹窗标题
+            data: 统计数据 {case_name: {count, avg_steps, avg_time, avg_tps}}
+            op_type: "oll" 或 "pll"
+        """
+        win = tk.Toplevel(self.root)
+        win.title(title)
+        win.geometry("900x700")
+        win.configure(bg=THEME["bg"])
+        win.resizable(True, True)
+        win.transient(self.root)
+        win.grab_set()
+
+        main_frame = tk.Frame(win, bg=THEME["bg"], padx=12, pady=8)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 顶部统计概要
+        total_count = sum(d["count"] for d in data.values())
+        case_count = len(data)
+        summary_frame = tk.Frame(main_frame, bg=THEME["card_bg"], padx=12, pady=8,
+                                  highlightthickness=1, highlightbackground=THEME["border"])
+        summary_frame.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(summary_frame, text=f"共 {case_count} 种状态 | 总出现 {total_count} 次",
+                 font=("Microsoft YaHei", 10), bg=THEME["card_bg"],
+                 fg=THEME["fg"]).pack(anchor="w")
+
+        # 排序控制栏
+        sort_frame = tk.Frame(main_frame, bg=THEME["card_bg"], padx=12, pady=6,
+                               highlightthickness=1, highlightbackground=THEME["border"])
+        sort_frame.pack(fill=tk.X, pady=(0, 8))
+
+        tk.Label(sort_frame, text="排序:", font=("Microsoft YaHei", 9),
+                 bg=THEME["card_bg"], fg=THEME["fg"]).pack(side=tk.LEFT)
+
+        sort_key_var = tk.StringVar(value="出现次数")
+        sort_order_var = tk.StringVar(value="降序")
+
+        sort_keys = ["序号", "出现次数", "步数", "用时", "识别时间", "TPS"]
+        sort_key_combo = ttk.Combobox(sort_frame, textvariable=sort_key_var,
+                                       values=sort_keys, state="readonly", width=8)
+        sort_key_combo.pack(side=tk.LEFT, padx=(4, 8))
+
+        sort_orders = ["升序", "降序"]
+        sort_order_combo = ttk.Combobox(sort_frame, textvariable=sort_order_var,
+                                         values=sort_orders, state="readonly", width=5)
+        sort_order_combo.pack(side=tk.LEFT, padx=(0, 8))
+
+        # 获取图片目录
+        img_dir = os.path.join(APP_DIR, "png", "OLL" if op_type == "oll" else "PLL")
+
+        # 可滚动的统计内容区域
+        canvas = tk.Canvas(main_frame, bg=THEME["bg"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=canvas.yview)
+        scroll_frame = tk.Frame(canvas, bg=THEME["bg"])
+
+        scroll_frame.bind("<Configure>",
+                          lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 鼠标滚轮支持
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        win.protocol("WM_DELETE_WINDOW", lambda: (canvas.unbind_all("<MouseWheel>"), win.destroy()))
+
+        # 保存图片引用防止GC
+        _photo_refs = []
+
+        def _render_list():
+            for w in scroll_frame.winfo_children():
+                w.destroy()
+            _photo_refs.clear()
+
+            sort_key = sort_key_var.get()
+            reverse = sort_order_var.get() == "降序"
+
+            key_map = {
+                "序号": lambda x: (int(x[0]) if op_type == "oll" and x[0].isdigit() else x[0]),
+                "出现次数": lambda x: x[1]["count"],
+                "步数": lambda x: x[1]["avg_steps"],
+                "用时": lambda x: x[1]["avg_time"],
+                "识别时间": lambda x: x[1]["avg_obs_time"],
+                "TPS": lambda x: x[1]["avg_tps"],
+            }
+            sort_func = key_map.get(sort_key, key_map["出现次数"])
+            sorted_cases = sorted(data.items(), key=sort_func, reverse=reverse)
+
+            for case_name, case_data in sorted_cases:
+                row_frame = tk.Frame(scroll_frame, bg=THEME["card_bg"], padx=8, pady=6,
+                                      highlightthickness=1, highlightbackground=THEME["border"])
+                row_frame.pack(fill=tk.X, padx=4, pady=3)
+
+                # 图片区域 - 固定宽度容器确保对齐
+                img_container = tk.Frame(row_frame, bg=THEME["card_bg"], width=70, height=60)
+                img_container.pack(side=tk.LEFT, padx=(0, 10))
+                img_container.pack_propagate(False)
+
+                if op_type == "oll":
+                    img_path = os.path.join(img_dir, f"OLL{case_name}.png")
+                else:
+                    img_path = os.path.join(img_dir, f"PLL {case_name}.png")
+
+                img_loaded = False
+                if os.path.isfile(img_path):
+                    try:
+                        from PIL import Image as PILImage, ImageTk
+                        pil_img = PILImage.open(img_path)
+                        pil_img.thumbnail((60, 60), PILImage.LANCZOS)
+                        photo = ImageTk.PhotoImage(pil_img)
+                        _photo_refs.append(photo)
+                        img_label = tk.Label(img_container, image=photo, bg=THEME["card_bg"])
+                        img_label.pack(expand=True)
+                        img_loaded = True
+                    except Exception:
+                        img_loaded = False
+
+                if not img_loaded:
+                    tk.Label(img_container,
+                             text=f"OLL {case_name}" if op_type == "oll" else f"PLL {case_name}",
+                             font=("Microsoft YaHei", 10, "bold"), bg=THEME["card_bg"],
+                             fg=THEME["accent"]).pack(expand=True)
+
+                # 统计信息
+                info_frame = tk.Frame(row_frame, bg=THEME["card_bg"])
+                info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+                case_title = f"OLL-{case_name}" if op_type == "oll" else f"PLL-{case_name}"
+                tk.Label(info_frame, text=case_title,
+                         font=("Microsoft YaHei", 11, "bold"), bg=THEME["card_bg"],
+                         fg=THEME["fg"]).pack(anchor="w")
+
+                stats_text = (
+                    f"出现次数: {case_data['count']}    "
+                    f"平均步数: {case_data['avg_steps']}    "
+                    f"平均用时: {case_data['avg_time']:.2f}s    "
+                    f"平均识别: {case_data['avg_obs_time']:.2f}s    "
+                    f"平均TPS: {case_data['avg_tps']}"
+                )
+                tk.Label(info_frame, text=stats_text,
+                         font=("Microsoft YaHei", 9), bg=THEME["card_bg"],
+                         fg="#636e72").pack(anchor="w")
+
+            canvas.yview_moveto(0)
+
+        # 排序变化时刷新列表
+        sort_key_combo.bind("<<ComboboxSelected>>", lambda e: _render_list())
+        sort_order_combo.bind("<<ComboboxSelected>>", lambda e: _render_list())
+
+        # 初始渲染
+        _render_list()
+
+        # 关闭按钮
+        btn_frame = tk.Frame(win, bg=THEME["bg"], padx=12, pady=8)
+        btn_frame.pack(fill=tk.X)
+        ttk.Button(btn_frame, text="关闭",
+                   command=lambda: (canvas.unbind_all("<MouseWheel>"), win.destroy()),
+                   style="Secondary.TButton").pack(side=tk.RIGHT)
+
     def _do_multi_analysis(self):
         api_key = self.api_key_entry.get().strip()
         model = self.model_var.get()

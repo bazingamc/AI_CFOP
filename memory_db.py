@@ -935,6 +935,70 @@ def import_cstimer(file_path: str, progress_cb=None) -> dict:
     return results
 
 
+def get_oll_pll_stats() -> dict:
+    """获取OLL和PLL各状态的出现次数、平均步数、平均用时、平均TPS、平均识别时间
+
+    统计的是OLL/PLL阶段本身的步数、用时、TPS、观察时间（来自phase_stats表），
+    而非整体还原的total_steps/total_time/total_tps。
+
+    Returns:
+        {
+            "oll": { "1": {"count": N, "avg_steps": X, "avg_time": Y, "avg_tps": Z, "avg_obs_time": W}, ... },
+            "pll": { "Aa": {"count": N, "avg_steps": X, "avg_time": Y, "avg_tps": Z, "avg_obs_time": W}, ... }
+        }
+    """
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+
+    result = {"oll": {}, "pll": {}}
+
+    # OLL统计 - 关联phase_stats获取OLL阶段的步数/用时/TPS/观察时间
+    c.execute(
+        "SELECT r.oll_case, COUNT(*) as cnt, "
+        "AVG(p.steps) as avg_steps, AVG(p.time) as avg_time, AVG(p.tps) as avg_tps, "
+        "AVG(p.observation_time) as avg_obs_time "
+        "FROM records r "
+        "JOIN phase_stats p ON r.id = p.record_id AND p.phase = 'oll' "
+        "WHERE r.user_id = ? AND r.oll_case != '' AND r.oll_case IS NOT NULL "
+        "GROUP BY r.oll_case ORDER BY cnt DESC",
+        (uid,)
+    )
+    for row in c.fetchall():
+        oll_case = row[0]
+        result["oll"][oll_case] = {
+            "count": row[1],
+            "avg_steps": round(row[2], 1) if row[2] else 0,
+            "avg_time": round(row[3], 2) if row[3] else 0,
+            "avg_tps": round(row[4], 1) if row[4] else 0,
+            "avg_obs_time": round(row[5], 2) if row[5] else 0,
+        }
+
+    # PLL统计 - 关联phase_stats获取PLL阶段的步数/用时/TPS/观察时间
+    c.execute(
+        "SELECT r.pll_case, COUNT(*) as cnt, "
+        "AVG(p.steps) as avg_steps, AVG(p.time) as avg_time, AVG(p.tps) as avg_tps, "
+        "AVG(p.observation_time) as avg_obs_time "
+        "FROM records r "
+        "JOIN phase_stats p ON r.id = p.record_id AND p.phase = 'pll' "
+        "WHERE r.user_id = ? AND r.pll_case != '' AND r.pll_case IS NOT NULL "
+        "GROUP BY r.pll_case ORDER BY cnt DESC",
+        (uid,)
+    )
+    for row in c.fetchall():
+        pll_case = row[0]
+        result["pll"][pll_case] = {
+            "count": row[1],
+            "avg_steps": round(row[2], 1) if row[2] else 0,
+            "avg_time": round(row[3], 2) if row[3] else 0,
+            "avg_tps": round(row[4], 1) if row[4] else 0,
+            "avg_obs_time": round(row[5], 2) if row[5] else 0,
+        }
+
+    conn.close()
+    return result
+
+
 def get_today_records() -> List[Dict]:
     today = datetime.now().strftime("%Y-%m-%d")
     conn = _get_conn()
