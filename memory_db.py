@@ -85,6 +85,10 @@ def init_db():
         c.execute("ALTER TABLE records ADD COLUMN total_tps REAL NOT NULL DEFAULT 0")
     if 'processed_solve' not in col_names:
         c.execute("ALTER TABLE records ADD COLUMN processed_solve TEXT NOT NULL DEFAULT ''")
+    if 'oll_case' not in col_names:
+        c.execute("ALTER TABLE records ADD COLUMN oll_case TEXT NOT NULL DEFAULT ''")
+    if 'pll_case' not in col_names:
+        c.execute("ALTER TABLE records ADD COLUMN pll_case TEXT NOT NULL DEFAULT ''")
 
     c.execute("CREATE INDEX IF NOT EXISTS idx_phase_stats_record ON phase_stats(record_id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_phase_stats_phase ON phase_stats(phase)")
@@ -97,7 +101,7 @@ def init_db():
 def save_record(scramble: str, solution: str, total_time: float,
                 bottom_color: str, phase_stats: Dict,
                 total_steps: int = 0, total_tps: float = 0.0,
-                processed_solve: str = "") -> int:
+                processed_solve: str = "", oll_case: str = "", pll_case: str = "") -> int:
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
@@ -110,8 +114,8 @@ def save_record(scramble: str, solution: str, total_time: float,
         return 0
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute(
-        "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color, total_steps, total_tps, processed_solve) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (uid, now, scramble, solution, total_time, bottom_color, total_steps, total_tps, processed_solve)
+        "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color, total_steps, total_tps, processed_solve, oll_case, pll_case) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (uid, now, scramble, solution, total_time, bottom_color, total_steps, total_tps, processed_solve, oll_case, pll_case)
     )
     record_id = c.lastrowid
     for phase, stats in phase_stats.items():
@@ -228,7 +232,7 @@ def get_records_by_date(date_str: str = None, start_date: str = None, end_date: 
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
-    fields = "id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags, total_steps, total_tps, processed_solve"
+    fields = "id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags, total_steps, total_tps, processed_solve, oll_case, pll_case"
     if start_date and end_date:
         c.execute(
             f"SELECT {fields} FROM records WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date ASC",
@@ -250,7 +254,8 @@ def get_records_by_date(date_str: str = None, start_date: str = None, end_date: 
             "id": row[0], "date": row[1], "scramble": row[2],
             "solution": row[3], "total_time": row[4], "bottom_color": row[5],
             "analyzed": row[6], "strength_tags": row[7], "weakness_tags": row[8],
-            "total_steps": row[9], "total_tps": row[10], "processed_solve": row[11]
+            "total_steps": row[9], "total_tps": row[10], "processed_solve": row[11],
+            "oll_case": row[12], "pll_case": row[13]
         })
     conn.close()
     return records
@@ -260,7 +265,7 @@ def get_record_detail(record_id: int) -> Optional[Dict]:
     conn = _get_conn()
     c = conn.cursor()
     c.execute(
-        "SELECT id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags "
+        "SELECT id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags, oll_case, pll_case "
         "FROM records WHERE id = ?",
         (record_id,)
     )
@@ -271,7 +276,8 @@ def get_record_detail(record_id: int) -> Optional[Dict]:
     record = {
         "id": row[0], "date": row[1], "scramble": row[2],
         "solution": row[3], "total_time": row[4], "bottom_color": row[5],
-        "analyzed": row[6], "strength_tags": row[7], "weakness_tags": row[8]
+        "analyzed": row[6], "strength_tags": row[7], "weakness_tags": row[8],
+        "oll_case": row[9], "pll_case": row[10]
     }
     c.execute(
         "SELECT phase, steps, time, observation_time, stutter_count, wasted_moves, tps "
@@ -435,6 +441,16 @@ def update_record_tags(record_id: int, strength_tags: list, weakness_tags: list)
     conn.close()
 
 
+def update_oll_pll_case(record_id: int, oll_case: str, pll_case: str):
+    """更新记录的OLL/PLL识别结果"""
+    conn = _get_conn()
+    c = conn.cursor()
+    c.execute("UPDATE records SET oll_case = ?, pll_case = ? WHERE id = ?",
+              (oll_case, pll_case, record_id))
+    conn.commit()
+    conn.close()
+
+
 def recalculate_all_records(progress_cb=None) -> dict:
     """根据打乱公式和原始还原数据，重新计算并更新所有记录的计算字段
 
@@ -476,12 +492,13 @@ def recalculate_all_records(progress_cb=None) -> dict:
             total_steps = sum(s.get("steps", 0) for s in stats.values())
             total_tps = total_steps / total_time if total_time > 0 else 0
             processed_solve = analyzer.generate_processed_solve()
+            oll_case, pll_case = analyzer.identify_oll_pll()
 
             conn = _get_conn()
             c2 = conn.cursor()
             c2.execute(
-                "UPDATE records SET bottom_color=?, total_steps=?, total_tps=?, processed_solve=? WHERE id=?",
-                (bottom_color_name, total_steps, total_tps, processed_solve, record_id)
+                "UPDATE records SET bottom_color=?, total_steps=?, total_tps=?, processed_solve=?, oll_case=?, pll_case=? WHERE id=?",
+                (bottom_color_name, total_steps, total_tps, processed_solve, oll_case, pll_case, record_id)
             )
             # 删除旧的phase_stats并重新插入
             c2.execute("DELETE FROM phase_stats WHERE record_id=?", (record_id,))
@@ -771,10 +788,11 @@ def import_csv(file_path: str, progress_cb=None) -> dict:
             total_steps = sum(s.get("steps", 0) for s in stats.values())
             total_tps = total_steps / total_time if total_time > 0 else 0
             processed_solve = analyzer.generate_processed_solve()
+            oll_case, pll_case = analyzer.identify_oll_pll()
 
             c.execute(
-                "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color, total_steps, total_tps, processed_solve) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (uid, g["date"], scramble, solution, total_time, bottom_color_name, total_steps, total_tps, processed_solve)
+                "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color, total_steps, total_tps, processed_solve, oll_case, pll_case) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (uid, g["date"], scramble, solution, total_time, bottom_color_name, total_steps, total_tps, processed_solve, oll_case, pll_case)
             )
             record_id = c.lastrowid
             for phase in PHASE_ORDER:
@@ -887,9 +905,10 @@ def import_cstimer(file_path: str, progress_cb=None) -> dict:
             total_steps = sum(s.get("steps", 0) for s in stats.values())
             total_tps = total_steps / total_time if total_time > 0 else 0
             processed_solve = analyzer.generate_processed_solve()
+            oll_case, pll_case = analyzer.identify_oll_pll()
             c.execute(
-                "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color, total_steps, total_tps, processed_solve) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (uid, date_str, scramble, review_str, total_time, bottom_color_name, total_steps, total_tps, processed_solve)
+                "INSERT INTO records (user_id, date, scramble, solution, total_time, bottom_color, total_steps, total_tps, processed_solve, oll_case, pll_case) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (uid, date_str, scramble, review_str, total_time, bottom_color_name, total_steps, total_tps, processed_solve, oll_case, pll_case)
             )
             record_id = c.lastrowid
             for phase in PHASE_ORDER:

@@ -2203,10 +2203,36 @@ class CFOPAnalyzerGUI:
             orient_frame.pack(anchor="w", padx=(12, 0), pady=(2, 4))
             if front_name:
                 tk.Label(orient_frame, text=f"底色：{bottom_name}  前色：{front_name}",
-                         font=("Microsoft YaHei", 10), bg=THEME["card_bg"], fg=THEME["fg"]).pack(side=tk.LEFT)
+                         font=("Microsoft YaHei", 10), bg=THEME["card_bg"], fg=THEME["fg"]).pack(side=tk.LEFT, padx=(0, 12))
             else:
                 tk.Label(orient_frame, text=f"底色：{bottom_name}",
-                         font=("Microsoft YaHei", 10), bg=THEME["card_bg"], fg=THEME["fg"]).pack(side=tk.LEFT)
+                         font=("Microsoft YaHei", 10), bg=THEME["card_bg"], fg=THEME["fg"]).pack(side=tk.LEFT, padx=(0, 12))
+
+            # 重新计算OLL/PLL编码并显示
+            oll_case = ""
+            pll_case = ""
+            try:
+                _scramble = detail.get("scramble", "")
+                _solution = detail.get("solution", "")
+                if _scramble and _solution:
+                    _, _analyzer, _ = CFOPAnalyzer.auto_detect_bottom_color(_scramble, _solution)
+                    oll_case, pll_case = _analyzer.identify_oll_pll()
+                    # 回写数据库
+                    if oll_case or pll_case:
+                        memory_db.update_oll_pll_case(detail["id"], oll_case, pll_case)
+            except Exception as e:
+                if log:
+                    log.warning(f"[GUI] OLL/PLL识别失败(id={detail.get('id', '?')}): {e}")
+            if oll_case:
+                oll_text = "跳O" if oll_case == "skip" else f"OLL {oll_case}"
+                tk.Label(orient_frame, text=oll_text, font=("Microsoft YaHei", 10),
+                         bg="#e8f0fe", fg="#1565c0", padx=8, pady=2,
+                         relief="groove", borderwidth=1).pack(side=tk.LEFT, padx=(0, 8))
+            if pll_case:
+                pll_text = "跳P" if pll_case == "skip" else f"PLL {pll_case}"
+                tk.Label(orient_frame, text=pll_text, font=("Microsoft YaHei", 10),
+                         bg="#fef0e8", fg="#c62828", padx=8, pady=2,
+                         relief="groove", borderwidth=1).pack(side=tk.LEFT, padx=(0, 8))
 
             phase_data = parsed_phases.get("phases", parsed_phases)
 

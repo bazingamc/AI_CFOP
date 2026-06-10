@@ -599,6 +599,10 @@ class CFOPAnalyzer:
         self.phase_standard_timed_moves = {"cross": []}
         pending_phase_start = None
 
+        # F2L物理槽位：基于初始view_map计算4个物理F2L槽位的角块/棱块索引
+        # 物理槽位不随y转体变化，避免view_map不同步导致的检测错误
+        physical_f2l_slots = None
+
         step_count = 0
         for original_move, timestamp in self.solution:
             step_count += 1
@@ -626,17 +630,49 @@ class CFOPAnalyzer:
                 current_standard_timed_moves = []
                 current_phase = "f2l"
                 cross_done = True
+                # 计算F2L物理槽位（基于初始view_map，不随y转体变化）
+                real_d = self.analysis_view_map.get('D', 'D')
+                real_f = self.analysis_view_map.get('F', 'F')
+                real_r = self.analysis_view_map.get('R', 'R')
+                real_l = self.analysis_view_map.get('L', 'L')
+                real_b = self.analysis_view_map.get('B', 'B')
+                physical_f2l_slots = [
+                    cube._get_f2l_slot_pieces(real_d, real_f, real_r),  # 物理槽1: FR
+                    cube._get_f2l_slot_pieces(real_d, real_f, real_l),  # 物理槽2: FL
+                    cube._get_f2l_slot_pieces(real_d, real_b, real_l),  # 物理槽3: BL
+                    cube._get_f2l_slot_pieces(real_d, real_b, real_r),  # 物理槽4: BR
+                ]
+                log.debug(f"[CFOPAnalyzer] F2L物理槽位: {physical_f2l_slots}")
                 self.phase_timestamps["f2l1"] = {"start": 0, "end": 0}
                 self.phase_timed_moves["f2l1"] = []
                 self.phase_standard_moves["f2l1"] = []
                 self.phase_standard_timed_moves["f2l1"] = []
                 pending_phase_start = "f2l1"
             elif current_phase == "f2l":
+                # 直接检查物理F2L槽位（不依赖view_map，避免y转体导致检测错误）
                 slot_found = None
                 for i in range(4):
-                    if not f2l_done[i] and cube.is_f2l_solved(i + 1):
-                        slot_found = i + 1  # 实际完成的槽位号(1-4)
-                        break
+                    if not f2l_done[i]:
+                        corner, edge = physical_f2l_slots[i]
+                        if (cube.cp[corner] == corner and cube.co[corner] == 0 and
+                                cube.ep[edge] == edge and cube.eo[edge] == 0):
+                            slot_found = i + 1
+                            break
+
+                # 验证：新槽位完成时，所有已完成的槽位必须仍然处于完成状态
+                # 防止某步骤暂时完成一个槽位但破坏了之前已完成的槽位
+                if slot_found is not None:
+                    all_prev_solved = True
+                    for i in range(4):
+                        if f2l_done[i]:
+                            corner, edge = physical_f2l_slots[i]
+                            if not (cube.cp[corner] == corner and cube.co[corner] == 0 and
+                                    cube.ep[edge] == edge and cube.eo[edge] == 0):
+                                all_prev_solved = False
+                                log.debug(f"[CFOPAnalyzer] 物理槽{slot_found}已解决，但物理槽{i+1}被破坏，暂不标记完成")
+                                break
+                    if not all_prev_solved:
+                        slot_found = None
 
                 if slot_found is not None:
                     slot_idx = slot_found - 1  # 转为0-based索引
@@ -725,6 +761,57 @@ class CFOPAnalyzer:
         self._analyze_result = result
         return result
 
+    @staticmethod
+    def _apply_y_to_view_map(view_map: Dict[str, str], times: int = 1) -> Dict[str, str]:
+        """对view_map应用y旋转（不改变cube状态，只改变观察坐标系）
+
+        Args:
+            view_map: 当前的观察面→真实面映射
+            times: y旋转次数（1=y, 2=y2, 3=y'）
+
+        Returns:
+            新的view_map
+        """
+        result = view_map.copy()
+        for _ in range(times):
+            old = result.copy()
+            result['F'] = old['R']
+            result['R'] = old['B']
+            result['B'] = old['L']
+            result['L'] = old['F']
+        return result
+
+    def _try_f2l_with_y_rotations(self, cube: Cube, f2l_done: List[bool],
+                                   current_view_map: Dict[str, str]):
+        """尝试4个y方向的view_map来检测F2L槽位完成
+
+        当固定view_map下没有检测到新槽位完成时，尝试y/y'/y2方向，
+        因为用户可能做了y转体。
+
+        Args:
+            cube: 当前魔方状态
+            f2l_done: 各槽位是否已完成
+            current_view_map: 当前的view_map
+
+        Returns:
+            (slot_found, best_view_map) 或 (None, None)
+        """
+        original_view_map = cube.view_map.copy()
+
+        for y_times in range(1, 4):  # y, y2, y'
+            rotated_map = self._apply_y_to_view_map(current_view_map, y_times)
+            cube.view_map = rotated_map
+
+            for i in range(4):
+                if not f2l_done[i] and cube.is_f2l_solved(i + 1):
+                    best_view_map = rotated_map
+                    cube.view_map = original_view_map
+                    log.debug(f"[CFOPAnalyzer] F2L槽位{i+1}在y*{y_times}方向检测到完成")
+                    return i + 1, best_view_map
+
+        cube.view_map = original_view_map
+        return None, None
+
     def _merge_moves(self, moves: List[str]) -> List[str]:
         if not moves:
             return []
@@ -743,20 +830,14 @@ class CFOPAnalyzer:
     @staticmethod
     def merge_timed_moves(timed_moves: List[tuple], gap_threshold_ms: float = 300.0,
                           middle_gap_threshold_ms: float = 100.0) -> List[tuple]:
-        """合并带时间戳的步骤，相同相邻步骤在间隔<=gap_threshold_ms时合并为X2，
-        对面相邻步骤在间隔<=middle_gap_threshold_ms时合并为中层旋转(M/S/E)
+        """合并带时间戳的步骤，相同相邻步骤在间隔<=gap_threshold_ms时合并为X2
 
-        中层旋转规则（标准魔方约定）：
-        - M与L同向：R' L → M', R L' → M, R2 L2 → M2
-        - E与D同向：U' D → E', U D' → E, U2 D2 → E2
-        - S与F同向：F B' → S', F' B → S, F2 B2 → S2
-
-        合并条件：两个对面步骤方向相反（物理上同向旋转，如R'和L）
+        注意：不对面步骤合并为中层旋转(M/S/E)，因为 L' R ≠ M（L'R旋转两个外层面，M只旋转中间层）
 
         Args:
             timed_moves: [(move, timestamp_ms), ...]
             gap_threshold_ms: 同面合并间隔阈值（毫秒），默认300ms
-            middle_gap_threshold_ms: 中层旋转合并间隔阈值（毫秒），默认100ms
+            middle_gap_threshold_ms: 未使用，保留参数兼容性
 
         Returns:
             [(merged_move, timestamp_ms), ...]
@@ -764,52 +845,12 @@ class CFOPAnalyzer:
         if not timed_moves:
             return []
 
-        # 中层旋转查表：(face1, face2, dir1, dir2) → middle_move
-        # dir: 1=正向, -1=反向, 2=180度
-        # 合并条件：dir1 == -dir2（方向相反，物理同向）
-        MIDDLE_MAP = {
-            # M层（R-L对面）
-            ('R', 'L', -1, 1): "M'",    # R' L → M'
-            ('R', 'L', 1, -1): 'M',     # R L' → M
-            ('R', 'L', 2, 2): 'M2',     # R2 L2 → M2
-            ('L', 'R', 1, -1): "M'",    # L R' → M'
-            ('L', 'R', -1, 1): 'M',     # L' R → M
-            ('L', 'R', 2, 2): 'M2',     # L2 R2 → M2
-            # E层（U-D对面）
-            ('U', 'D', -1, 1): "E'",    # U' D → E'
-            ('U', 'D', 1, -1): 'E',     # U D' → E
-            ('U', 'D', 2, 2): 'E2',     # U2 D2 → E2
-            ('D', 'U', 1, -1): "E'",    # D U' → E'
-            ('D', 'U', -1, 1): 'E',     # D' U → E
-            ('D', 'U', 2, 2): 'E2',     # D2 U2 → E2
-            # S层（F-B对面）
-            ('F', 'B', 1, -1): "S'",    # F B' → S'
-            ('F', 'B', -1, 1): 'S',     # F' B → S
-            ('F', 'B', 2, 2): 'S2',     # F2 B2 → S2
-            ('B', 'F', -1, 1): "S'",    # B' F → S'
-            ('B', 'F', 1, -1): 'S',     # B F' → S
-            ('B', 'F', 2, 2): 'S2',     # B2 F2 → S2
-        }
-
-        def _parse_face_dir(move):
-            """解析步骤的面和方向: R→(R,1), R'→(R,-1), R2→(R,2)"""
-            if not move:
-                return None, 0
-            face = move[0]
-            if len(move) == 1:
-                return face, 1
-            elif move[1] == "'":
-                return face, -1
-            elif move[1] == '2':
-                return face, 2
-            return face, 1
-
         result = []
         i = 0
         while i < len(timed_moves):
             move, ts = timed_moves[i]
 
-            # 1. 尝试同面合并 (R R → R2)
+            # 尝试同面合并 (R R → R2)
             if i + 1 < len(timed_moves):
                 next_move, next_ts = timed_moves[i + 1]
                 gap = next_ts - ts
@@ -817,21 +858,6 @@ class CFOPAnalyzer:
                     result.append((move[0] + '2', ts))
                     i += 2
                     continue
-
-            # 2. 尝试对面合并为中层旋转 (R' L → M')
-            if i + 1 < len(timed_moves):
-                next_move, next_ts = timed_moves[i + 1]
-                gap = next_ts - ts
-                if gap <= middle_gap_threshold_ms:
-                    face1, dir1 = _parse_face_dir(move)
-                    face2, dir2 = _parse_face_dir(next_move)
-                    if face1 and face2 and dir1 != 0 and dir2 != 0:
-                        key = (face1, face2, dir1, dir2)
-                        middle_move = MIDDLE_MAP.get(key)
-                        if middle_move:
-                            result.append((middle_move, ts))
-                            i += 2
-                            continue
 
             result.append((move, ts))
             i += 1
@@ -1099,6 +1125,108 @@ class CFOPAnalyzer:
         for move, _ in self.solution:
             cube.apply_standard_move(move)
         return cube.is_pll_solved()
+
+    def identify_oll_pll(self) -> tuple:
+        """识别本次还原的OLL和PLL初始状态
+
+        根据打乱和processed solve，回放到OLL和PLL开始前的状态，
+        然后调用Cube的identify_oll/identify_pll进行识别。
+
+        Returns:
+            tuple: (oll_case, pll_case)
+                oll_case: OLL编号字符串（如 "1"~"57"），未识别返回空字符串
+                pll_case: PLL名称字符串（如 "Aa", "T"），未识别返回空字符串
+        """
+        self.analyze()
+
+        oll_case = ""
+        pll_case = ""
+
+        # 使用processed_solve回放（包含y旋转信息）
+        processed = self.generate_processed_solve()
+        parsed = self.parse_processed_solve(processed)
+        phases = parsed.get("phases", {})
+
+        if log:
+            log.info("[OLL/PLL识别] ========== 开始识别 ==========")
+            log.info(f"[OLL/PLL识别] processed_solve: {processed}")
+            log.info(f"[OLL/PLL识别] analysis_view_map: {self.analysis_view_map}")
+
+        # 回放到OLL开始前的状态（Cross + 4组F2L完成）
+        cube = Cube()
+        for move in self.scramble:
+            cube.apply_standard_move(move)
+        cube.view_map = self.analysis_view_map.copy()
+
+        # 应用 cross + f2l1~f2l4 的步骤
+        if log:
+            log.info("[OLL识别] 回放 cross + f2l1~f2l4 阶段:")
+        for phase_name in ["cross", "f2l1", "f2l2", "f2l3", "f2l4"]:
+            phase_data = phases.get(phase_name, {})
+            y_rot = phase_data.get("y_rotation", "")
+            if y_rot:
+                cube.apply_rotation(y_rot)
+                if log:
+                    log.info(f"[OLL识别]   {phase_name}阶段转体: {y_rot}")
+            moves = phase_data.get("moves", [])
+            if log:
+                move_strs = [m for m, _ in moves]
+                log.info(f"[OLL识别]   {phase_name}阶段步骤({len(moves)}步): {' '.join(move_strs)}")
+            for move, ts_ms in moves:
+                cube.apply_move(move)
+
+        if log:
+            log.info(f"[OLL识别] F2L完成后状态验证: Cross={cube.is_cross_solved()}, "
+                      f"F2L1={cube.is_f2l_solved(1)}, F2L2={cube.is_f2l_solved(2)}, "
+                      f"F2L3={cube.is_f2l_solved(3)}, F2L4={cube.is_f2l_solved(4)}, "
+                      f"OLL完成={cube.is_oll_solved()}")
+            log.info(f"[OLL识别] F2L完成后view_map: {cube.view_map}")
+
+        if not cube.is_oll_solved():
+            oll_case = cube.identify_oll()
+        else:
+            oll_case = "skip"
+            if log:
+                log.info("[OLL识别] OLL已完成（跳O）")
+
+        # 回放到PLL开始前的状态（OLL完成）
+        cube2 = Cube()
+        for move in self.scramble:
+            cube2.apply_standard_move(move)
+        cube2.view_map = self.analysis_view_map.copy()
+
+        # 应用 cross + f2l1~f2l4 + oll 的步骤
+        if log:
+            log.info("[PLL识别] 回放 cross + f2l1~f2l4 + oll 阶段:")
+        for phase_name in ["cross", "f2l1", "f2l2", "f2l3", "f2l4", "oll"]:
+            phase_data = phases.get(phase_name, {})
+            y_rot = phase_data.get("y_rotation", "")
+            if y_rot:
+                cube2.apply_rotation(y_rot)
+                if log:
+                    log.info(f"[PLL识别]   {phase_name}阶段转体: {y_rot}")
+            moves = phase_data.get("moves", [])
+            if log:
+                move_strs = [m for m, _ in moves]
+                log.info(f"[PLL识别]   {phase_name}阶段步骤({len(moves)}步): {' '.join(move_strs)}")
+            for move, ts_ms in moves:
+                cube2.apply_move(move)
+
+        if log:
+            log.info(f"[PLL识别] OLL完成后状态验证: OLL完成={cube2.is_oll_solved()}, PLL完成={cube2.is_pll_solved()}")
+            log.info(f"[PLL识别] OLL完成后view_map: {cube2.view_map}")
+
+        if not cube2.is_pll_solved():
+            pll_case = cube2.identify_pll()
+        else:
+            pll_case = "skip"
+            if log:
+                log.info("[PLL识别] PLL已完成（跳P）")
+
+        if log:
+            log.info(f"[OLL/PLL识别] ========== 识别结果: OLL={oll_case or '未识别'}, PLL={pll_case or '未识别'} ==========")
+
+        return (oll_case, pll_case)
 
     def generate_processed_solve(self) -> str:
         """生成处理后的还原数据字符串
