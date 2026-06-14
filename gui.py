@@ -1550,7 +1550,11 @@ class CFOPAnalyzerGUI:
 
         self._home_scroll_frame.bind("<Configure>",
             lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=self._home_scroll_frame, anchor="nw")
+
+        def _on_canvas_configure(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+        canvas_window = canvas.create_window((0, 0), window=self._home_scroll_frame, anchor="nw")
+        canvas.bind("<Configure>", _on_canvas_configure)
         canvas.configure(yscrollcommand=scrollbar.set)
 
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -1571,7 +1575,7 @@ class CFOPAnalyzerGUI:
         card_bg = bg_color or THEME["card_bg"]
         card = tk.Frame(parent, bg=card_bg, padx=12, pady=8,
                         highlightthickness=1, highlightbackground=THEME["border"])
-        card.pack(side=tk.LEFT, padx=(0, 8), fill=tk.Y)
+        card.pack(side=tk.LEFT, padx=(0, 8), fill=tk.BOTH, expand=True)
 
         tk.Label(card, text=title, font=("Microsoft YaHei", 9),
                  bg=card_bg, fg="#888888").pack(anchor="w")
@@ -1589,7 +1593,7 @@ class CFOPAnalyzerGUI:
 
         card = tk.Frame(parent, bg=light_bg, padx=10, pady=6,
                         highlightthickness=1, highlightbackground=color)
-        card.pack(side=tk.LEFT, padx=(0, 6), pady=2, fill=tk.Y)
+        card.pack(side=tk.LEFT, padx=(0, 6), pady=2, fill=tk.BOTH, expand=True)
 
         tk.Label(card, text=label, font=("Microsoft YaHei", 9, "bold"),
                  bg=light_bg, fg=color).pack(anchor="w")
@@ -1647,11 +1651,12 @@ class CFOPAnalyzerGUI:
         cards_row.pack(fill=tk.X, pady=(4, 8))
 
         pb_val = f"{pb['time']:.2f}s" if pb else "--"
-        pb_sub = f"({pb['date']})" if pb else ""
+        pb_sub = f"({pb['date']}) 全部数据" if pb else "全部数据"
         self._make_stat_card(cards_row, "🏆 个人最佳", pb_val, pb_sub, width=180)
 
         avg_val = f"{total_avg:.2f}s" if total_avg else "--"
         avg_sub_parts = []
+        avg_sub_parts.append("最近1000次")
         if total_std:
             avg_sub_parts.append(f"σ {total_std:.2f}s")
         if total_avg_7d and total_avg:
@@ -1664,6 +1669,7 @@ class CFOPAnalyzerGUI:
 
         tps_val = f"{total_tps_avg:.1f}" if total_tps_avg else "--"
         tps_sub_parts = []
+        tps_sub_parts.append("最近1000次")
         if total_tps_std:
             tps_sub_parts.append(f"σ {total_tps_std:.1f}")
         if total_tps_7d and total_tps_avg:
@@ -1706,11 +1712,13 @@ class CFOPAnalyzerGUI:
             self._make_phase_card(row1, "pll", "PLL", avg["pll"], PHASE_COLORS["pll"])
 
         if f2l_available:
+            f2l_label_row = tk.Frame(phase_section, bg=THEME["bg"])
+            f2l_label_row.pack(fill=tk.X, pady=(0, 2))
+            tk.Label(f2l_label_row, text="F2L各组:", font=("Microsoft YaHei", 9),
+                     bg=THEME["bg"], fg="#888888").pack(side=tk.LEFT, padx=(0, 6))
+
             row2 = tk.Frame(phase_section, bg=THEME["bg"])
             row2.pack(fill=tk.X, pady=(0, 4))
-
-            tk.Label(row2, text="F2L各组:", font=("Microsoft YaHei", 9),
-                     bg=THEME["bg"], fg="#888888").pack(side=tk.LEFT, padx=(0, 6), anchor="s")
 
             for p in f2l_phases:
                 if p in avg:
@@ -1722,9 +1730,9 @@ class CFOPAnalyzerGUI:
         ]
         trend_data = []
         for label, days in trend_periods:
-            t_avg = memory_db.get_total_time_avg(days=days, analyzed_only=False)
-            s_avg = memory_db.get_total_steps_avg(days=days, analyzed_only=False)
-            tps_avg = memory_db.get_total_tps_avg(days=days, analyzed_only=False)
+            t_avg = memory_db.get_total_time_avg(days=days, analyzed_only=False, limit=None)
+            s_avg = memory_db.get_total_steps_avg(days=days, analyzed_only=False, limit=None)
+            tps_avg = memory_db.get_total_tps_avg(days=days, analyzed_only=False, limit=None)
             cnt = memory_db.get_record_count_by_period(days=days)
             if t_avg is not None:
                 trend_data.append((label, t_avg, s_avg, tps_avg, cnt))
@@ -1742,11 +1750,16 @@ class CFOPAnalyzerGUI:
 
             # 使用grid布局保证对齐
             headers = ["时段", "记录数", "用时", "变化", "步数", "TPS"]
-            col_widths = [8, 6, 10, 10, 8, 8]
-            for col, (h, w) in enumerate(zip(headers, col_widths)):
+            header_anchors = ["w", "e", "e", "e", "e", "w"]
+            for col, (h, a) in enumerate(zip(headers, header_anchors)):
+                trend_card.columnconfigure(col, weight=0, minsize=10)
                 tk.Label(trend_card, text=h, font=("Microsoft YaHei", 9, "bold"),
-                         bg=THEME["card_bg"], fg=THEME["fg"], width=w, anchor="center"
-                         ).grid(row=0, column=col, padx=2, pady=(0, 4))
+                         bg=THEME["card_bg"], fg=THEME["fg"], anchor=a
+                         ).grid(row=0, column=col, padx=(8, 4), pady=(0, 4), sticky="w" if a == "w" else "e")
+            # 空列撑满右侧留白
+            trend_card.columnconfigure(len(headers), weight=1)
+            tk.Label(trend_card, text="", bg=THEME["card_bg"]
+                     ).grid(row=0, column=len(headers), sticky="ew")
 
             sep_frame = tk.Frame(trend_card, bg=THEME["border"], height=1)
             sep_frame.grid(row=1, column=0, columnspan=len(headers), sticky="ew", pady=2)
@@ -1754,16 +1767,16 @@ class CFOPAnalyzerGUI:
             prev_time = None
             for row_idx, (period_label, t_avg, s_avg, tps_avg, cnt) in enumerate(trend_data, start=2):
                 tk.Label(trend_card, text=period_label, font=("Microsoft YaHei", 9),
-                         bg=THEME["card_bg"], fg=THEME["fg"], width=col_widths[0], anchor="w"
-                         ).grid(row=row_idx, column=0, padx=2, pady=1)
+                         bg=THEME["card_bg"], fg=THEME["fg"], anchor="w"
+                         ).grid(row=row_idx, column=0, padx=(8, 4), pady=1, sticky="w")
 
                 tk.Label(trend_card, text=str(cnt), font=("Microsoft YaHei", 9),
-                         bg=THEME["card_bg"], fg=THEME["fg"], width=col_widths[1], anchor="e"
-                         ).grid(row=row_idx, column=1, padx=2, pady=1)
+                         bg=THEME["card_bg"], fg=THEME["fg"], anchor="e"
+                         ).grid(row=row_idx, column=1, padx=(4, 6), pady=1, sticky="e")
 
                 tk.Label(trend_card, text=f"{t_avg:.2f}s", font=("Microsoft YaHei", 9),
-                         bg=THEME["card_bg"], fg=THEME["fg"], width=col_widths[2], anchor="e"
-                         ).grid(row=row_idx, column=2, padx=2, pady=1)
+                         bg=THEME["card_bg"], fg=THEME["fg"], anchor="e"
+                         ).grid(row=row_idx, column=2, padx=(4, 6), pady=1, sticky="e")
 
                 # 变化趋势
                 if prev_time is not None:
@@ -1773,26 +1786,26 @@ class CFOPAnalyzerGUI:
                         arrow_fg = "#e74c3c" if diff > 0 else "#27ae60"
                         diff_str = f"{arrow} {abs(diff):.2f}s"
                         tk.Label(trend_card, text=diff_str, font=("Microsoft YaHei", 9),
-                                 bg=THEME["card_bg"], fg=arrow_fg, width=col_widths[3], anchor="e"
-                                 ).grid(row=row_idx, column=3, padx=2, pady=1)
+                                 bg=THEME["card_bg"], fg=arrow_fg, anchor="e"
+                                 ).grid(row=row_idx, column=3, padx=(4, 6), pady=1, sticky="e")
                     else:
                         tk.Label(trend_card, text="--", font=("Microsoft YaHei", 9),
-                                 bg=THEME["card_bg"], fg="#999999", width=col_widths[3], anchor="e"
-                                 ).grid(row=row_idx, column=3, padx=2, pady=1)
+                                 bg=THEME["card_bg"], fg="#999999", anchor="e"
+                                 ).grid(row=row_idx, column=3, padx=(4, 6), pady=1, sticky="e")
                 else:
                     tk.Label(trend_card, text="--", font=("Microsoft YaHei", 9),
-                             bg=THEME["card_bg"], fg="#999999", width=col_widths[3], anchor="e"
-                             ).grid(row=row_idx, column=3, padx=2, pady=1)
+                             bg=THEME["card_bg"], fg="#999999", anchor="e"
+                             ).grid(row=row_idx, column=3, padx=(4, 6), pady=1, sticky="e")
 
                 steps_str = f"{s_avg:.1f}" if s_avg else "--"
                 tk.Label(trend_card, text=steps_str, font=("Microsoft YaHei", 9),
-                         bg=THEME["card_bg"], fg=THEME["fg"], width=col_widths[4], anchor="e"
-                         ).grid(row=row_idx, column=4, padx=2, pady=1)
+                         bg=THEME["card_bg"], fg=THEME["fg"], anchor="e"
+                         ).grid(row=row_idx, column=4, padx=(4, 6), pady=1, sticky="e")
 
                 tps_str = f"{tps_avg:.1f}" if tps_avg else "--"
                 tk.Label(trend_card, text=tps_str, font=("Microsoft YaHei", 9),
-                         bg=THEME["card_bg"], fg=THEME["fg"], width=col_widths[5], anchor="e"
-                         ).grid(row=row_idx, column=5, padx=2, pady=1)
+                         bg=THEME["card_bg"], fg=THEME["fg"], anchor="w"
+                         ).grid(row=row_idx, column=5, padx=(4, 6), pady=1, sticky="w")
 
                 prev_time = t_avg
 

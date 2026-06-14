@@ -181,10 +181,13 @@ def get_averages(days: Optional[int] = None, limit: int = 1000) -> Dict[str, Dic
     uid = _current_user_id if _current_user_id else 0
     if days is not None:
         since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("SELECT id FROM records WHERE user_id = ? AND date >= ? ORDER BY date DESC LIMIT ?",
-                  (uid, since, limit))
+        c.execute("SELECT id FROM records WHERE user_id = ? AND date >= ? ORDER BY date DESC",
+                  (uid, since))
     else:
-        c.execute("SELECT id FROM records WHERE user_id = ? ORDER BY date DESC LIMIT ?", (uid, limit))
+        if limit is not None:
+            c.execute("SELECT id FROM records WHERE user_id = ? ORDER BY date DESC LIMIT ?", (uid, limit))
+        else:
+            c.execute("SELECT id FROM records WHERE user_id = ? ORDER BY date DESC", (uid,))
     record_ids = [row[0] for row in c.fetchall()]
     if not record_ids:
         conn.close()
@@ -324,17 +327,20 @@ def get_all_averages_by_period() -> Dict[str, Dict[str, Dict[str, float]]]:
     return result
 
 
-def get_total_time_avg(days: Optional[int] = None, limit: int = 1000, analyzed_only: bool = True) -> Optional[float]:
+def get_total_time_avg(days: Optional[int] = None, analyzed_only: bool = True, limit: int = 1000) -> Optional[float]:
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
     analyzed_cond = " AND analyzed = 1" if analyzed_only else ""
     if days is not None:
         since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute(f"SELECT total_time FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC LIMIT ?",
-                  (uid, since, limit))
+        c.execute(f"SELECT total_time FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC",
+                  (uid, since))
     else:
-        c.execute(f"SELECT total_time FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+        if limit is not None:
+            c.execute(f"SELECT total_time FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+        else:
+            c.execute(f"SELECT total_time FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC", (uid,))
     values = [row[0] for row in c.fetchall() if row[0] is not None]
     conn.close()
     if not values:
@@ -342,17 +348,20 @@ def get_total_time_avg(days: Optional[int] = None, limit: int = 1000, analyzed_o
     return round(_trimmed_mean(values), 2)
 
 
-def get_total_time_std(days: Optional[int] = None, limit: int = 1000, analyzed_only: bool = True) -> Optional[float]:
+def get_total_time_std(days: Optional[int] = None, analyzed_only: bool = True, limit: int = 1000) -> Optional[float]:
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
     analyzed_cond = " AND analyzed = 1" if analyzed_only else ""
     if days is not None:
         since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute(f"SELECT total_time FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC LIMIT ?",
-                  (uid, since, limit))
+        c.execute(f"SELECT total_time FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC",
+                  (uid, since))
     else:
-        c.execute(f"SELECT total_time FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+        if limit is not None:
+            c.execute(f"SELECT total_time FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+        else:
+            c.execute(f"SELECT total_time FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC", (uid,))
     values = [row[0] for row in c.fetchall() if row[0] is not None]
     conn.close()
     if not values or len(values) < 2:
@@ -372,17 +381,20 @@ def get_pb() -> Optional[dict]:
     return None
 
 
-def get_total_tps_avg(days: Optional[int] = None, limit: int = 1000, analyzed_only: bool = True) -> Optional[float]:
+def get_total_tps_avg(days: Optional[int] = None, analyzed_only: bool = True, limit: int = 1000) -> Optional[float]:
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
     analyzed_cond = " AND analyzed = 1" if analyzed_only else ""
     if days is not None:
         since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute(f"SELECT total_tps FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC LIMIT ?",
-                  (uid, since, limit))
+        c.execute(f"SELECT total_tps FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC",
+                  (uid, since))
     else:
-        c.execute(f"SELECT total_tps FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+        if limit is not None:
+            c.execute(f"SELECT total_tps FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+        else:
+            c.execute(f"SELECT total_tps FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC", (uid,))
     values = [row[0] for row in c.fetchall() if row[0] is not None]
     conn.close()
     if not values:
@@ -390,17 +402,20 @@ def get_total_tps_avg(days: Optional[int] = None, limit: int = 1000, analyzed_on
     return round(_trimmed_mean(values), 2)
 
 
-def get_total_tps_std(days: Optional[int] = None, limit: int = 1000, analyzed_only: bool = True) -> Optional[float]:
+def get_total_tps_std(days: Optional[int] = None, analyzed_only: bool = True, limit: int = 1000) -> Optional[float]:
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
     analyzed_cond = " AND analyzed = 1" if analyzed_only else ""
     if days is not None:
         since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute(f"SELECT total_tps FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC LIMIT ?",
-                  (uid, since, limit))
+        c.execute(f"SELECT total_tps FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC",
+                  (uid, since))
     else:
-        c.execute(f"SELECT total_tps FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+        if limit is not None:
+            c.execute(f"SELECT total_tps FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+        else:
+            c.execute(f"SELECT total_tps FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC", (uid,))
     values = [row[0] for row in c.fetchall() if row[0] is not None]
     conn.close()
     if not values or len(values) < 2:
@@ -408,17 +423,20 @@ def get_total_tps_std(days: Optional[int] = None, limit: int = 1000, analyzed_on
     return round(_std_dev(values), 2)
 
 
-def get_total_steps_avg(days: Optional[int] = None, limit: int = 1000, analyzed_only: bool = True) -> Optional[float]:
+def get_total_steps_avg(days: Optional[int] = None, analyzed_only: bool = True, limit: int = 1000) -> Optional[float]:
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
     analyzed_cond = " AND analyzed = 1" if analyzed_only else ""
     if days is not None:
         since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute(f"SELECT total_steps FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC LIMIT ?",
-                  (uid, since, limit))
+        c.execute(f"SELECT total_steps FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC",
+                  (uid, since))
     else:
-        c.execute(f"SELECT total_steps FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+        if limit is not None:
+            c.execute(f"SELECT total_steps FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+        else:
+            c.execute(f"SELECT total_steps FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC", (uid,))
     values = [row[0] for row in c.fetchall() if row[0] is not None]
     conn.close()
     if not values:
