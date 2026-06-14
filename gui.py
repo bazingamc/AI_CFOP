@@ -52,9 +52,22 @@ class CFOPAnalyzerGUI:
             return avatar_path
         return abs_path
 
+    def _center_window(self, win):
+        """将弹窗居中于主窗口"""
+        win.update_idletasks()
+        main_x = self.root.winfo_x()
+        main_y = self.root.winfo_y()
+        main_w = self.root.winfo_width()
+        main_h = self.root.winfo_height()
+        win_w = win.winfo_width()
+        win_h = win.winfo_height()
+        x = main_x + (main_w - win_w) // 2
+        y = main_y + (main_h - win_h) // 2
+        win.wm_geometry(f"+{x}+{y}")
+
     def __init__(self, root):
         self.root = root
-        self.root.title("AI_CFOP V1.1")
+        self.root.title("AI_CFOP V1.2")
         self.root.geometry("960x980")
         self.root.resizable(True, True)
         self.root.configure(bg=THEME["bg"])
@@ -144,13 +157,8 @@ class CFOPAnalyzerGUI:
         dialog.grab_set()
         dialog.protocol("WM_DELETE_WINDOW", lambda: self._on_user_dialog_close(dialog))
 
-        dialog_width = 500
-        dialog_height = 520
-        dialog.geometry(f"{dialog_width}x{dialog_height}")
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() - dialog_width) // 2
-        y = (dialog.winfo_screenheight() - dialog_height) // 2
-        dialog.geometry(f"+{x}+{y}")
+        dialog.geometry("500x520")
+        self._center_window(dialog)
 
         main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=24, pady=20)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
@@ -284,13 +292,8 @@ class CFOPAnalyzerGUI:
         dialog.attributes('-topmost', True)
         dialog.grab_set()
 
-        dialog_width = 400
-        dialog_height = 240
-        dialog.geometry(f"{dialog_width}x{dialog_height}")
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() - dialog_width) // 2
-        y = (dialog.winfo_screenheight() - dialog_height) // 2
-        dialog.geometry(f"+{x}+{y}")
+        dialog.geometry("400x240")
+        self._center_window(dialog)
 
         main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=20, pady=16)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -347,13 +350,8 @@ class CFOPAnalyzerGUI:
         dialog.attributes('-topmost', True)
         dialog.grab_set()
 
-        dialog_width = 500
-        dialog_height = 480
-        dialog.geometry(f"{dialog_width}x{dialog_height}")
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() - dialog_width) // 2
-        y = (dialog.winfo_screenheight() - dialog_height) // 2
-        dialog.geometry(f"+{x}+{y}")
+        dialog.geometry("500x480")
+        self._center_window(dialog)
 
         main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=16, pady=12)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -462,13 +460,8 @@ class CFOPAnalyzerGUI:
         dialog.attributes('-topmost', True)
         dialog.grab_set()
 
-        dialog_width = 420
-        dialog_height = 280
-        dialog.geometry(f"{dialog_width}x{dialog_height}")
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() - dialog_width) // 2
-        y = (dialog.winfo_screenheight() - dialog_height) // 2
-        dialog.geometry(f"+{x}+{y}")
+        dialog.geometry("420x280")
+        self._center_window(dialog)
 
         main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=20, pady=16)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -611,13 +604,8 @@ class CFOPAnalyzerGUI:
         confirm.attributes('-topmost', True)
         confirm.grab_set()
 
-        confirm_width = 360
-        confirm_height = 160
-        confirm.geometry(f"{confirm_width}x{confirm_height}")
-        confirm.update_idletasks()
-        x = (confirm.winfo_screenwidth() - confirm_width) // 2
-        y = (confirm.winfo_screenheight() - confirm_height) // 2
-        confirm.geometry(f"+{x}+{y}")
+        confirm.geometry("360x160")
+        self._center_window(confirm)
 
         frame = tk.Frame(confirm, bg=THEME["card_bg"], padx=20, pady=16)
         frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -712,13 +700,8 @@ class CFOPAnalyzerGUI:
         dialog.transient(self.root)
         dialog.grab_set()
 
-        dialog_width = 420
-        dialog_height = 240
-        dialog.geometry(f"{dialog_width}x{dialog_height}")
-        dialog.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - dialog_width) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - dialog_height) // 2
-        dialog.geometry(f"+{x}+{y}")
+        dialog.geometry("420x240")
+        self._center_window(dialog)
 
         main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=20, pady=16)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
@@ -874,67 +857,60 @@ class CFOPAnalyzerGUI:
     def _create_tooltip(self, widget, text):
         tooltip = [None]
         hide_timer = [None]
-        
+
         def show_tooltip(event):
             if hide_timer[0]:
                 widget.after_cancel(hide_timer[0])
                 hide_timer[0] = None
-            
+
             if tooltip[0]:
                 return
-            
+
             x = widget.winfo_rootx() + 20
             y = widget.winfo_rooty() + widget.winfo_height() + 5
-            
+
             tip = tk.Toplevel(widget)
             tip.wm_overrideredirect(True)
             tip.wm_geometry(f"+{x}+{y}")
             tip.wm_attributes("-topmost", True)
-            
+
             frame = tk.Frame(tip, bg=THEME["border"], padx=1, pady=1)
             frame.pack(fill="both", expand=True)
-            
+
             lines = text.split('\n')
             max_line_width = max(len(line) for line in lines if line.strip()) if lines else 10
-            
             text_width = min(max(max_line_width + 2, 30), 55)
-            visible_height = 10
-            
-            text_widget = tk.Text(frame, font=("Microsoft YaHei", 9),
-                                  bg="#ffffcc", fg=THEME["fg"],
-                                  padx=8, pady=6, wrap=tk.WORD,
-                                  width=text_width, height=visible_height, relief="flat",
-                                  cursor="arrow")
-            scrollbar = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text_widget.yview)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            text_widget.config(yscrollcommand=scrollbar.set)
-            text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-            text_widget.insert("1.0", text.strip())
-            text_widget.config(state="normal")
-            
+            text_height = len(lines)
+
+            label = tk.Label(frame, text=text.strip(), font=("Microsoft YaHei", 9),
+                             bg="#ffffcc", fg=THEME["fg"],
+                             padx=8, pady=6, wraplength=text_width * 9,
+                             justify=tk.LEFT, anchor="nw")
+            label.pack()
+
             tooltip[0] = tip
-            
+
             def on_tip_enter(e):
                 if hide_timer[0]:
                     widget.after_cancel(hide_timer[0])
                     hide_timer[0] = None
-            
+
             def on_tip_leave(e):
                 hide_tooltip(None)
-            
+
             tip.bind("<Enter>", on_tip_enter)
             tip.bind("<Leave>", on_tip_leave)
-            text_widget.bind("<Leave>", on_tip_leave)
-        
+            label.bind("<Leave>", on_tip_leave)
+
         def hide_tooltip(event):
             def do_hide():
                 if tooltip[0]:
                     tooltip[0].destroy()
                     tooltip[0] = None
                 hide_timer[0] = None
-            
+
             hide_timer[0] = widget.after(100, do_hide)
-        
+
         widget.bind("<Enter>", show_tooltip)
         widget.bind("<Leave>", hide_tooltip)
 
@@ -951,6 +927,7 @@ class CFOPAnalyzerGUI:
         progress_win.transient(self.root)
         progress_win.grab_set()
         progress_win.configure(bg=THEME["bg"])
+        self._center_window(progress_win)
 
         tk.Label(progress_win, text="正在重新计算分析结果...",
                  bg=THEME["bg"], fg=THEME["fg"],
@@ -1254,11 +1231,7 @@ class CFOPAnalyzerGUI:
         progress_win.resizable(False, False)
         progress_win.transient(self.root)
         progress_win.grab_set()
-
-        progress_win.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - 350) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - 120) // 2
-        progress_win.geometry(f"+{x}+{y}")
+        self._center_window(progress_win)
 
         tk.Label(progress_win, text="正在导入，请稍候...", font=("Microsoft YaHei", 10)).pack(pady=(15, 5))
         progress_label = tk.Label(progress_win, text="准备中...", font=("Microsoft YaHei", 9), fg="#666")
@@ -1295,11 +1268,7 @@ class CFOPAnalyzerGUI:
         progress_win.resizable(False, False)
         progress_win.transient(self.root)
         progress_win.grab_set()
-
-        progress_win.update_idletasks()
-        x = self.root.winfo_x() + (self.root.winfo_width() - 350) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - 120) // 2
-        progress_win.geometry(f"+{x}+{y}")
+        self._center_window(progress_win)
 
         tk.Label(progress_win, text="正在导入，请稍候...", font=("Microsoft YaHei", 10)).pack(pady=(15, 5))
         progress_label = tk.Label(progress_win, text="准备中...", font=("Microsoft YaHei", 9), fg="#666")
@@ -1395,12 +1364,9 @@ class CFOPAnalyzerGUI:
         dialog.transient(self.root)
         dialog.grab_set()
         dialog.resizable(False, False)
-        
-        dialog_width = 500
-        dialog_height = 520
-        x = self.root.winfo_x() + (self.root.winfo_width() - dialog_width) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - dialog_height) // 2
-        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+
+        dialog.geometry("500x520")
+        self._center_window(dialog)
         
         main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=24, pady=20)
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -1574,29 +1540,294 @@ class CFOPAnalyzerGUI:
         stats_header.pack(fill=tk.X, pady=(8, 2), padx=8)
         ttk.Label(stats_header, text="  📊 水平统计", font=("Microsoft YaHei", 11, "bold"),
                   foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
+        ttk.Button(stats_header, text="🔄 刷新", command=self._refresh_home_stats,
+                   style="Accent.TButton").pack(side=tk.RIGHT)
 
-        self._home_stats_panel = tk.Frame(tab, bg=THEME["card_bg"], padx=12, pady=8,
-                                           highlightthickness=1, highlightbackground=THEME["border"])
-        self._home_stats_panel.pack(fill=tk.X, padx=8, pady=(0, 8))
+        # 可滚动容器
+        canvas = tk.Canvas(tab, bg=THEME["bg"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(tab, orient=tk.VERTICAL, command=canvas.yview)
+        self._home_scroll_frame = tk.Frame(canvas, bg=THEME["bg"])
 
-        self._home_stats_text = tk.Text(self._home_stats_panel, font=("Consolas", 9),
-                                         bg=THEME["card_bg"], fg=THEME["fg"],
-                                         height=25, wrap=tk.NONE, relief="flat",
-                                         cursor="arrow", state="disabled",
-                                         selectbackground=THEME["accent"],
-                                         selectforeground="white")
-        self._home_stats_text.tag_configure("bold", font=("Consolas", 9, "bold"))
-        self._home_stats_text.tag_configure("highlight_label", font=("Consolas", 11, "bold"), foreground="#4A90D9")
-        self._home_stats_text.tag_configure("highlight_value", font=("Consolas", 13, "bold"), foreground="#2E6FBA")
-        self._home_stats_scroll_y = ttk.Scrollbar(self._home_stats_panel, orient=tk.VERTICAL, command=self._home_stats_text.yview)
-        self._home_stats_scroll_x = ttk.Scrollbar(self._home_stats_panel, orient=tk.HORIZONTAL, command=self._home_stats_text.xview)
-        self._home_stats_text.config(yscrollcommand=self._home_stats_scroll_y.set,
-                                      xscrollcommand=self._home_stats_scroll_x.set)
-        self._home_stats_scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
-        self._home_stats_scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
-        self._home_stats_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._home_scroll_frame.bind("<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=self._home_scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        # 鼠标滚轮绑定
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        self._home_canvas = canvas
 
         self._refresh_home_stats()
+
+    def _make_stat_card(self, parent, title, value, subtitle="", bg_color=None, width=160):
+        """创建一个统计卡片"""
+        card_bg = bg_color or THEME["card_bg"]
+        card = tk.Frame(parent, bg=card_bg, padx=12, pady=8,
+                        highlightthickness=1, highlightbackground=THEME["border"])
+        card.pack(side=tk.LEFT, padx=(0, 8), fill=tk.Y)
+
+        tk.Label(card, text=title, font=("Microsoft YaHei", 9),
+                 bg=card_bg, fg="#888888").pack(anchor="w")
+        tk.Label(card, text=value, font=("Microsoft YaHei", 20, "bold"),
+                 bg=card_bg, fg=THEME["fg"]).pack(anchor="w")
+        if subtitle:
+            tk.Label(card, text=subtitle, font=("Microsoft YaHei", 8),
+                     bg=card_bg, fg="#999999").pack(anchor="w")
+        return card
+
+    def _make_phase_card(self, parent, phase, label, data, color):
+        """创建一个阶段统计卡片"""
+        r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+        light_bg = f"#{min(r+140,255):02x}{min(g+140,255):02x}{min(b+140,255):02x}"
+
+        card = tk.Frame(parent, bg=light_bg, padx=10, pady=6,
+                        highlightthickness=1, highlightbackground=color)
+        card.pack(side=tk.LEFT, padx=(0, 6), pady=2, fill=tk.Y)
+
+        tk.Label(card, text=label, font=("Microsoft YaHei", 9, "bold"),
+                 bg=light_bg, fg=color).pack(anchor="w")
+
+        time_str = f"{data['time']:.2f}s"
+        tk.Label(card, text=time_str, font=("Microsoft YaHei", 14, "bold"),
+                 bg=light_bg, fg=THEME["fg"]).pack(anchor="w")
+
+        detail = f"{data['steps']:.1f}步  {data['tps']:.1f}TPS"
+        tk.Label(card, text=detail, font=("Microsoft YaHei", 8),
+                 bg=light_bg, fg="#666666").pack(anchor="w")
+
+        obs_str = f"观察 {data['observation_time']:.2f}s"
+        tk.Label(card, text=obs_str, font=("Microsoft YaHei", 8),
+                 bg=light_bg, fg="#666666").pack(anchor="w")
+
+        std_str = f"σ步{data['steps_std']:.1f} σ时{data['time_std']:.2f}"
+        tk.Label(card, text=std_str, font=("Microsoft YaHei", 7),
+                 bg=light_bg, fg="#aaaaaa").pack(anchor="w")
+
+        return card
+
+    def _make_tag_chip(self, parent, text, is_strength=True):
+        """创建优缺点标签"""
+        bg = "#d4edda" if is_strength else "#f8d7da"
+        fg = "#155724" if is_strength else "#721c24"
+        chip = tk.Label(parent, text=text, font=("Microsoft YaHei", 9),
+                        bg=bg, fg=fg, padx=8, pady=3, relief="flat")
+        chip.pack(side=tk.LEFT, padx=(0, 6), pady=2)
+        return chip
+
+    def _refresh_home_stats(self):
+        from config import PHASE_ORDER, PHASE_COLORS, PHASE_LABELS
+        parent = self._home_scroll_frame
+
+        for w in parent.winfo_children():
+            w.destroy()
+
+        avg = memory_db.get_averages()
+        if not avg:
+            tk.Label(parent, text="暂无数据，完成分析后自动记录",
+                     font=("Microsoft YaHei", 11), bg=THEME["bg"], fg="#999999").pack(pady=40)
+            return
+
+        pb = memory_db.get_pb()
+        total_avg = memory_db.get_total_time_avg()
+        total_std = memory_db.get_total_time_std()
+        total_tps_avg = memory_db.get_total_tps_avg()
+        total_tps_std = memory_db.get_total_tps_std()
+        total_avg_7d = memory_db.get_total_time_avg(days=7)
+        total_tps_7d = memory_db.get_total_tps_avg(days=7)
+
+        # ═══ 第一行：核心指标卡片 ═══
+        cards_row = tk.Frame(parent, bg=THEME["bg"])
+        cards_row.pack(fill=tk.X, pady=(4, 8))
+
+        pb_val = f"{pb['time']:.2f}s" if pb else "--"
+        pb_sub = f"({pb['date']})" if pb else ""
+        self._make_stat_card(cards_row, "🏆 个人最佳", pb_val, pb_sub, width=180)
+
+        avg_val = f"{total_avg:.2f}s" if total_avg else "--"
+        avg_sub_parts = []
+        if total_std:
+            avg_sub_parts.append(f"σ {total_std:.2f}s")
+        if total_avg_7d and total_avg:
+            diff = total_avg_7d - total_avg
+            arrow = "↑" if diff > 0 else "↓"
+            color_hint = "退步" if diff > 0 else "进步"
+            avg_sub_parts.append(f"近7天 {total_avg_7d:.2f}s {arrow}{color_hint}")
+        avg_sub = "  |  ".join(avg_sub_parts)
+        self._make_stat_card(cards_row, "⏱ 平均用时", avg_val, avg_sub, width=220)
+
+        tps_val = f"{total_tps_avg:.1f}" if total_tps_avg else "--"
+        tps_sub_parts = []
+        if total_tps_std:
+            tps_sub_parts.append(f"σ {total_tps_std:.1f}")
+        if total_tps_7d and total_tps_avg:
+            diff = total_tps_7d - total_tps_avg
+            arrow = "↑" if diff > 0 else "↓"
+            tps_sub_parts.append(f"近7天 {total_tps_7d:.1f} {arrow}")
+        tps_sub = "  |  ".join(tps_sub_parts)
+        self._make_stat_card(cards_row, "⚡ 平均TPS", tps_val, tps_sub, width=200)
+
+        # ═══ 第二行：各阶段统计卡片 ═══
+        phase_section = tk.Frame(parent, bg=THEME["bg"])
+        phase_section.pack(fill=tk.X, pady=(0, 8))
+
+        tk.Label(phase_section, text="各阶段统计", font=("Microsoft YaHei", 10, "bold"),
+                 bg=THEME["bg"], fg=THEME["fg"]).pack(anchor="w", pady=(0, 4))
+
+        row1 = tk.Frame(phase_section, bg=THEME["bg"])
+        row1.pack(fill=tk.X, pady=(0, 4))
+
+        if "cross" in avg:
+            self._make_phase_card(row1, "cross", "Cross", avg["cross"], PHASE_COLORS["cross"])
+
+        f2l_phases = ["f2l1", "f2l2", "f2l3", "f2l4"]
+        f2l_available = [p for p in f2l_phases if p in avg]
+        if f2l_available:
+            f2l_avg = {
+                "time": sum(avg[p]["time"] for p in f2l_available) / len(f2l_available),
+                "steps": sum(avg[p]["steps"] for p in f2l_available) / len(f2l_available),
+                "tps": sum(avg[p]["tps"] for p in f2l_available) / len(f2l_available),
+                "observation_time": sum(avg[p]["observation_time"] for p in f2l_available) / len(f2l_available),
+                "steps_std": sum(avg[p]["steps_std"] for p in f2l_available) / len(f2l_available),
+                "time_std": sum(avg[p]["time_std"] for p in f2l_available) / len(f2l_available),
+            }
+            self._make_phase_card(row1, "f2l", "F2L均值", f2l_avg, "#6c5ce7")
+
+        if "oll" in avg:
+            self._make_phase_card(row1, "oll", "OLL", avg["oll"], PHASE_COLORS["oll"])
+
+        if "pll" in avg:
+            self._make_phase_card(row1, "pll", "PLL", avg["pll"], PHASE_COLORS["pll"])
+
+        if f2l_available:
+            row2 = tk.Frame(phase_section, bg=THEME["bg"])
+            row2.pack(fill=tk.X, pady=(0, 4))
+
+            tk.Label(row2, text="F2L各组:", font=("Microsoft YaHei", 9),
+                     bg=THEME["bg"], fg="#888888").pack(side=tk.LEFT, padx=(0, 6), anchor="s")
+
+            for p in f2l_phases:
+                if p in avg:
+                    self._make_phase_card(row2, p, PHASE_LABELS[p], avg[p], PHASE_COLORS[p])
+
+        # ═══ 第三行：趋势对比 ═══
+        trend_periods = [
+            ("近7天", 7), ("近30天", 30), ("近1年", 365), ("全部", None)
+        ]
+        trend_data = []
+        for label, days in trend_periods:
+            t_avg = memory_db.get_total_time_avg(days=days, analyzed_only=False)
+            s_avg = memory_db.get_total_steps_avg(days=days, analyzed_only=False)
+            tps_avg = memory_db.get_total_tps_avg(days=days, analyzed_only=False)
+            cnt = memory_db.get_record_count_by_period(days=days)
+            if t_avg is not None:
+                trend_data.append((label, t_avg, s_avg, tps_avg, cnt))
+
+        if len(trend_data) >= 2:
+            trend_section = tk.Frame(parent, bg=THEME["bg"])
+            trend_section.pack(fill=tk.X, pady=(0, 8))
+
+            tk.Label(trend_section, text="趋势对比", font=("Microsoft YaHei", 10, "bold"),
+                     bg=THEME["bg"], fg=THEME["fg"]).pack(anchor="w", pady=(0, 4))
+
+            trend_card = tk.Frame(trend_section, bg=THEME["card_bg"], padx=12, pady=8,
+                                   highlightthickness=1, highlightbackground=THEME["border"])
+            trend_card.pack(fill=tk.X)
+
+            # 使用grid布局保证对齐
+            headers = ["时段", "记录数", "用时", "变化", "步数", "TPS"]
+            col_widths = [8, 6, 10, 10, 8, 8]
+            for col, (h, w) in enumerate(zip(headers, col_widths)):
+                tk.Label(trend_card, text=h, font=("Microsoft YaHei", 9, "bold"),
+                         bg=THEME["card_bg"], fg=THEME["fg"], width=w, anchor="center"
+                         ).grid(row=0, column=col, padx=2, pady=(0, 4))
+
+            sep_frame = tk.Frame(trend_card, bg=THEME["border"], height=1)
+            sep_frame.grid(row=1, column=0, columnspan=len(headers), sticky="ew", pady=2)
+
+            prev_time = None
+            for row_idx, (period_label, t_avg, s_avg, tps_avg, cnt) in enumerate(trend_data, start=2):
+                tk.Label(trend_card, text=period_label, font=("Microsoft YaHei", 9),
+                         bg=THEME["card_bg"], fg=THEME["fg"], width=col_widths[0], anchor="w"
+                         ).grid(row=row_idx, column=0, padx=2, pady=1)
+
+                tk.Label(trend_card, text=str(cnt), font=("Microsoft YaHei", 9),
+                         bg=THEME["card_bg"], fg=THEME["fg"], width=col_widths[1], anchor="e"
+                         ).grid(row=row_idx, column=1, padx=2, pady=1)
+
+                tk.Label(trend_card, text=f"{t_avg:.2f}s", font=("Microsoft YaHei", 9),
+                         bg=THEME["card_bg"], fg=THEME["fg"], width=col_widths[2], anchor="e"
+                         ).grid(row=row_idx, column=2, padx=2, pady=1)
+
+                # 变化趋势
+                if prev_time is not None:
+                    diff = t_avg - prev_time
+                    if abs(diff) > 0.01:
+                        arrow = "↑" if diff > 0 else "↓"
+                        arrow_fg = "#e74c3c" if diff > 0 else "#27ae60"
+                        diff_str = f"{arrow} {abs(diff):.2f}s"
+                        tk.Label(trend_card, text=diff_str, font=("Microsoft YaHei", 9),
+                                 bg=THEME["card_bg"], fg=arrow_fg, width=col_widths[3], anchor="e"
+                                 ).grid(row=row_idx, column=3, padx=2, pady=1)
+                    else:
+                        tk.Label(trend_card, text="--", font=("Microsoft YaHei", 9),
+                                 bg=THEME["card_bg"], fg="#999999", width=col_widths[3], anchor="e"
+                                 ).grid(row=row_idx, column=3, padx=2, pady=1)
+                else:
+                    tk.Label(trend_card, text="--", font=("Microsoft YaHei", 9),
+                             bg=THEME["card_bg"], fg="#999999", width=col_widths[3], anchor="e"
+                             ).grid(row=row_idx, column=3, padx=2, pady=1)
+
+                steps_str = f"{s_avg:.1f}" if s_avg else "--"
+                tk.Label(trend_card, text=steps_str, font=("Microsoft YaHei", 9),
+                         bg=THEME["card_bg"], fg=THEME["fg"], width=col_widths[4], anchor="e"
+                         ).grid(row=row_idx, column=4, padx=2, pady=1)
+
+                tps_str = f"{tps_avg:.1f}" if tps_avg else "--"
+                tk.Label(trend_card, text=tps_str, font=("Microsoft YaHei", 9),
+                         bg=THEME["card_bg"], fg=THEME["fg"], width=col_widths[5], anchor="e"
+                         ).grid(row=row_idx, column=5, padx=2, pady=1)
+
+                prev_time = t_avg
+
+        # ═══ 第四行：优缺点标签 ═══
+        tag_stats = memory_db.get_tag_stats()
+        top_s = tag_stats.get("top_strengths", [])
+        top_w = tag_stats.get("top_weaknesses", [])
+
+        if top_s or top_w:
+            tag_section = tk.Frame(parent, bg=THEME["bg"])
+            tag_section.pack(fill=tk.X, pady=(0, 8))
+
+            if top_s:
+                s_row = tk.Frame(tag_section, bg=THEME["bg"])
+                s_row.pack(fill=tk.X, pady=(0, 4))
+                tk.Label(s_row, text="💪 优点:", font=("Microsoft YaHei", 9, "bold"),
+                         bg=THEME["bg"], fg="#27ae60").pack(side=tk.LEFT, padx=(0, 6))
+                for tag, cnt in top_s:
+                    self._make_tag_chip(s_row, f"{tag} ({cnt})", is_strength=True)
+
+            if top_w:
+                w_row = tk.Frame(tag_section, bg=THEME["bg"])
+                w_row.pack(fill=tk.X, pady=(0, 4))
+                tk.Label(w_row, text="⚠ 缺点:", font=("Microsoft YaHei", 9, "bold"),
+                         bg=THEME["bg"], fg="#e74c3c").pack(side=tk.LEFT, padx=(0, 6))
+                for tag, cnt in top_w:
+                    self._make_tag_chip(w_row, f"{tag} ({cnt})", is_strength=False)
+
+        # ═══ 底部信息栏 ═══
+        date_range = memory_db.get_date_range()
+        count = memory_db.get_record_count()
+        footer = tk.Frame(parent, bg=THEME["bg"])
+        footer.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(footer, text=f"📋 {count}条记录  |  📅 {date_range}  |  统计范围: 最近1000次",
+                 font=("Microsoft YaHei", 8), bg=THEME["bg"], fg="#aaaaaa").pack(anchor="w")
 
     def _build_training_tab(self):
         tab = self._tab_training
@@ -1616,93 +1847,6 @@ class CFOPAnalyzerGUI:
                    style="Accent.TButton").pack(side=tk.LEFT, padx=(12, 0))
         ttk.Button(train_frame, text="📈 PLL统计", command=self._show_pll_stats,
                    style="Accent.TButton").pack(side=tk.LEFT, padx=(12, 0))
-
-    def _refresh_home_stats(self):
-        from config import PHASE_ORDER
-        avg = memory_db.get_averages()
-        text_widget = self._home_stats_text
-
-        if not avg:
-            text_widget.config(state="normal")
-            text_widget.delete("1.0", tk.END)
-            text_widget.insert("1.0", "暂无数据，完成分析后自动记录")
-            text_widget.config(state="disabled")
-            return
-
-        sep = "─" * 80
-
-        text_widget.config(state="normal")
-        text_widget.delete("1.0", tk.END)
-
-        pb = memory_db.get_pb()
-        total_avg = memory_db.get_total_time_avg()
-        total_std = memory_db.get_total_time_std()
-        total_tps_avg = memory_db.get_total_tps_avg()
-        total_tps_std = memory_db.get_total_tps_std()
-
-        if pb:
-            text_widget.insert(tk.END, "PB: ", "highlight_label")
-            text_widget.insert(tk.END, f"{pb['time']:.2f}s", "highlight_value")
-            text_widget.insert(tk.END, f" ({pb['date']})\n")
-        if total_avg:
-            text_widget.insert(tk.END, "近1000次平均: ", "highlight_label")
-            text_widget.insert(tk.END, f"{total_avg:.2f}s", "highlight_value")
-            if total_std:
-                text_widget.insert(tk.END, "  标准差: ", "highlight_label")
-                text_widget.insert(tk.END, f"{total_std:.2f}s", "highlight_value")
-            if total_tps_avg:
-                text_widget.insert(tk.END, "  TPS: ", "highlight_label")
-                text_widget.insert(tk.END, f"{total_tps_avg:.1f}", "highlight_value")
-                if total_tps_std:
-                    text_widget.insert(tk.END, f"(σ{total_tps_std:.1f})", "highlight_value")
-            text_widget.insert(tk.END, "\n")
-
-        if pb or total_avg:
-            text_widget.insert(tk.END, sep + "\n")
-
-        text_widget.insert(tk.END, f"阶段\t步数(σ)\t用时(s)(σ)\t观察(s)(σ)\t卡顿\t废步\tTPS(σ)\n")
-        text_widget.insert(tk.END, sep + "\n")
-
-        phase_labels = {
-            "cross": "Cross", "f2l1": "F2L-1", "f2l2": "F2L-2",
-            "f2l3": "F2L-3", "f2l4": "F2L-4", "oll": "OLL", "pll": "PLL",
-        }
-        for phase in PHASE_ORDER:
-            if phase in avg:
-                s = avg[phase]
-                label = phase_labels.get(phase, phase)
-                text_widget.insert(
-                    tk.END,
-                    f"{label}\t{s['steps']:.1f}({s['steps_std']:.1f})"
-                    f"\t{s['time']:.2f}({s['time_std']:.2f})"
-                    f"\t{s['observation_time']:.2f}({s['observation_time_std']:.2f})"
-                    f"\t{s['stutter_count']:.1f}"
-                    f"\t{s['wasted_moves']:.1f}"
-                    f"\t{s['tps']:.1f}({s['tps_std']:.1f})\n"
-                )
-
-        date_range = memory_db.get_date_range()
-        count = memory_db.get_record_count()
-        text_widget.insert(tk.END, sep + "\n")
-        text_widget.insert(tk.END, f"记录: {count}条 | 时间: {date_range} | 统计: 最近1000次")
-
-        # 优缺点标签TOP3
-        tag_stats = memory_db.get_tag_stats()
-        top_s = tag_stats.get("top_strengths", [])
-        top_w = tag_stats.get("top_weaknesses", [])
-        if top_s or top_w:
-            text_widget.insert(tk.END, "\n")
-            text_widget.insert(tk.END, sep + "\n")
-            if top_s:
-                text_widget.insert(tk.END, "优点TOP3: ", "highlight_label")
-                s_parts = [f"{tag}({cnt})" for tag, cnt in top_s]
-                text_widget.insert(tk.END, "  ".join(s_parts) + "\n")
-            if top_w:
-                text_widget.insert(tk.END, "缺点TOP3: ", "highlight_label")
-                w_parts = [f"{tag}({cnt})" for tag, cnt in top_w]
-                text_widget.insert(tk.END, "  ".join(w_parts) + "\n")
-
-        text_widget.config(state="disabled")
 
     def _build_analysis_tab(self):
         tab = self._tab_analysis
@@ -2141,11 +2285,8 @@ class CFOPAnalyzerGUI:
         dialog.grab_set()
         dialog.resizable(True, True)
 
-        dialog_width = 800
-        dialog_height = 650
-        x = self.root.winfo_x() + (self.root.winfo_width() - dialog_width) // 2
-        y = self.root.winfo_y() + (self.root.winfo_height() - dialog_height) // 2
-        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+        dialog.geometry("800x650")
+        self._center_window(dialog)
 
         main_frame = tk.Frame(dialog, bg=THEME["card_bg"], padx=16, pady=12)
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -4241,6 +4382,7 @@ class CFOPAnalyzerGUI:
         win.resizable(True, True)
         win.transient(self.root)
         win.grab_set()
+        self._center_window(win)
 
         main_frame = tk.Frame(win, bg=THEME["bg"], padx=16, pady=12)
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -4338,6 +4480,7 @@ class CFOPAnalyzerGUI:
             confirm_win.resizable(False, False)
             confirm_win.transient(win)
             confirm_win.grab_set()
+            self._center_window(confirm_win)
 
             tk.Label(confirm_win, text=f"将使用模型: {model}",
                      font=("Microsoft YaHei", 10), bg=THEME["bg"],
@@ -4696,6 +4839,7 @@ class CFOPAnalyzerGUI:
         win.resizable(True, True)
         win.transient(self.root)
         win.grab_set()
+        self._center_window(win)
 
         main_frame = tk.Frame(win, bg=THEME["bg"], padx=12, pady=8)
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -4821,8 +4965,8 @@ class CFOPAnalyzerGUI:
 
                 stats_text = (
                     f"出现次数: {case_data['count']}    "
-                    f"平均步数: {case_data['avg_steps']}    "
-                    f"平均用时: {case_data['avg_time']:.2f}s    "
+                    f"平均步数: {case_data['avg_steps']}(σ{case_data['std_steps']})    "
+                    f"平均用时: {case_data['avg_time']:.2f}s(σ{case_data['std_time']:.2f})    "
                     f"平均识别: {case_data['avg_obs_time']:.2f}s    "
                     f"平均TPS: {case_data['avg_tps']}"
                 )

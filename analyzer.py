@@ -479,6 +479,11 @@ class CFOPAnalyzer:
             best_front = self.front_color
             best_score = float('-inf')
 
+            # 获取上一阶段的前色，用于计算转体惩罚
+            prev_front = orientations.get(
+                PHASE_ORDER[PHASE_ORDER.index(phase) - 1], self.front_color
+            ) if orientations else self.front_color
+
             for front_color in candidates:
                 mapping = self._build_output_mapping_for_front(front_color)
                 mapped_moves = [mapping.get(m, m) for m in standard_moves]
@@ -491,6 +496,19 @@ class CFOPAnalyzer:
                     score = self._score_moves_for_ruf(mapped_moves)
                     if mapped_moves:
                         score += self._score_phase_start(mapped_moves[0])
+
+                # 转体惩罚：如果此朝向与上一阶段不同，需要转体，减分
+                if front_color != prev_front:
+                    # 计算转体量（y/y'/y2），不同转体量惩罚不同
+                    y_rot = self._get_y_rotation_between_fronts(
+                        self.bottom_color, prev_front, front_color
+                    )
+                    if y_rot == 'y2':
+                        score -= 8.0  # y2转体成本最高
+                    elif y_rot in ('y', "y'"):
+                        score -= 5.0  # y/y'转体成本中等
+                    else:
+                        score -= 3.0  # 其他转体
 
                 if score > best_score:
                     best_score = score
@@ -703,13 +721,29 @@ class CFOPAnalyzer:
                     current_standard_timed_moves = []
 
                     if all(f2l_done):
-                        current_phase = "oll"
-                        self.phase_timestamps["oll"] = {"start": 0, "end": 0}
-                        self.phase_timed_moves["oll"] = []
-                        self.phase_standard_moves["oll"] = []
-                        self.phase_standard_timed_moves["oll"] = []
-                        pending_phase_start = "oll"
-                        log.debug(f"[CFOPAnalyzer] 所有F2L完成，进入OLL阶段")
+                        # 检查是否跳O：F2L-4完成的同时OLL也完成了
+                        if cube.is_oll_solved():
+                            # 跳O：OLL步数为0，直接进入PLL
+                            current_phase = "pll"
+                            self.oll_moves = []
+                            self.phase_timestamps["oll"] = {"start": timestamp, "end": timestamp}
+                            self.phase_timed_moves["oll"] = []
+                            self.phase_standard_moves["oll"] = []
+                            self.phase_standard_timed_moves["oll"] = []
+                            self.phase_timestamps["pll"] = {"start": 0, "end": 0}
+                            self.phase_timed_moves["pll"] = []
+                            self.phase_standard_moves["pll"] = []
+                            self.phase_standard_timed_moves["pll"] = []
+                            pending_phase_start = "pll"
+                            log.info(f"[CFOPAnalyzer] 跳O: F2L-4完成时OLL已完成，OLL为0步，直接进入PLL")
+                        else:
+                            current_phase = "oll"
+                            self.phase_timestamps["oll"] = {"start": 0, "end": 0}
+                            self.phase_timed_moves["oll"] = []
+                            self.phase_standard_moves["oll"] = []
+                            self.phase_standard_timed_moves["oll"] = []
+                            pending_phase_start = "oll"
+                            log.debug(f"[CFOPAnalyzer] 所有F2L完成，进入OLL阶段")
                     else:
                         next_f2l_num = f2l_num + 1
                         next_key = f"f2l{next_f2l_num}"
@@ -729,13 +763,24 @@ class CFOPAnalyzer:
                 current_timed_moves = []
                 current_standard_moves = []
                 current_standard_timed_moves = []
-                current_phase = "pll"
                 oll_done = True
-                self.phase_timestamps["pll"] = {"start": 0, "end": 0}
-                self.phase_timed_moves["pll"] = []
-                self.phase_standard_moves["pll"] = []
-                self.phase_standard_timed_moves["pll"] = []
-                pending_phase_start = "pll"
+                # 检查是否跳P：OLL完成的同时PLL也完成了
+                if cube.is_pll_solved():
+                    # 跳P：PLL步数为0
+                    current_phase = "pll"
+                    self.pll_moves = []
+                    self.phase_timestamps["pll"] = {"start": timestamp, "end": timestamp}
+                    self.phase_timed_moves["pll"] = []
+                    self.phase_standard_moves["pll"] = []
+                    self.phase_standard_timed_moves["pll"] = []
+                    log.info(f"[CFOPAnalyzer] 跳P: OLL完成时PLL已完成，PLL为0步")
+                else:
+                    current_phase = "pll"
+                    self.phase_timestamps["pll"] = {"start": 0, "end": 0}
+                    self.phase_timed_moves["pll"] = []
+                    self.phase_standard_moves["pll"] = []
+                    self.phase_standard_timed_moves["pll"] = []
+                    pending_phase_start = "pll"
             elif current_phase == "pll" and cube.is_pll_solved():
                 self.pll_moves = current_moves.copy()
                 self.phase_timestamps["pll"]["end"] = timestamp

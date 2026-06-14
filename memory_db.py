@@ -265,7 +265,7 @@ def get_record_detail(record_id: int) -> Optional[Dict]:
     conn = _get_conn()
     c = conn.cursor()
     c.execute(
-        "SELECT id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags, oll_case, pll_case "
+        "SELECT id, date, scramble, solution, total_time, bottom_color, analyzed, strength_tags, weakness_tags, oll_case, pll_case, total_steps, total_tps "
         "FROM records WHERE id = ?",
         (record_id,)
     )
@@ -277,7 +277,8 @@ def get_record_detail(record_id: int) -> Optional[Dict]:
         "id": row[0], "date": row[1], "scramble": row[2],
         "solution": row[3], "total_time": row[4], "bottom_color": row[5],
         "analyzed": row[6], "strength_tags": row[7], "weakness_tags": row[8],
-        "oll_case": row[9], "pll_case": row[10]
+        "oll_case": row[9], "pll_case": row[10],
+        "total_steps": row[11], "total_tps": row[12]
     }
     c.execute(
         "SELECT phase, steps, time, observation_time, stutter_count, wasted_moves, tps "
@@ -323,16 +324,17 @@ def get_all_averages_by_period() -> Dict[str, Dict[str, Dict[str, float]]]:
     return result
 
 
-def get_total_time_avg(days: Optional[int] = None, limit: int = 1000) -> Optional[float]:
+def get_total_time_avg(days: Optional[int] = None, limit: int = 1000, analyzed_only: bool = True) -> Optional[float]:
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
+    analyzed_cond = " AND analyzed = 1" if analyzed_only else ""
     if days is not None:
         since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("SELECT total_time FROM records WHERE user_id = ? AND date >= ? ORDER BY date DESC LIMIT ?",
+        c.execute(f"SELECT total_time FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC LIMIT ?",
                   (uid, since, limit))
     else:
-        c.execute("SELECT total_time FROM records WHERE user_id = ? ORDER BY date DESC LIMIT ?", (uid, limit))
+        c.execute(f"SELECT total_time FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
     values = [row[0] for row in c.fetchall() if row[0] is not None]
     conn.close()
     if not values:
@@ -340,16 +342,17 @@ def get_total_time_avg(days: Optional[int] = None, limit: int = 1000) -> Optiona
     return round(_trimmed_mean(values), 2)
 
 
-def get_total_time_std(days: Optional[int] = None, limit: int = 1000) -> Optional[float]:
+def get_total_time_std(days: Optional[int] = None, limit: int = 1000, analyzed_only: bool = True) -> Optional[float]:
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
+    analyzed_cond = " AND analyzed = 1" if analyzed_only else ""
     if days is not None:
         since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("SELECT total_time FROM records WHERE user_id = ? AND date >= ? ORDER BY date DESC LIMIT ?",
+        c.execute(f"SELECT total_time FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC LIMIT ?",
                   (uid, since, limit))
     else:
-        c.execute("SELECT total_time FROM records WHERE user_id = ? ORDER BY date DESC LIMIT ?", (uid, limit))
+        c.execute(f"SELECT total_time FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
     values = [row[0] for row in c.fetchall() if row[0] is not None]
     conn.close()
     if not values or len(values) < 2:
@@ -369,50 +372,74 @@ def get_pb() -> Optional[dict]:
     return None
 
 
-def get_total_tps_avg(days: Optional[int] = None, limit: int = 1000) -> Optional[float]:
+def get_total_tps_avg(days: Optional[int] = None, limit: int = 1000, analyzed_only: bool = True) -> Optional[float]:
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    analyzed_cond = " AND analyzed = 1" if analyzed_only else ""
+    if days is not None:
+        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        c.execute(f"SELECT total_tps FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC LIMIT ?",
+                  (uid, since, limit))
+    else:
+        c.execute(f"SELECT total_tps FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+    values = [row[0] for row in c.fetchall() if row[0] is not None]
+    conn.close()
+    if not values:
+        return None
+    return round(_trimmed_mean(values), 2)
+
+
+def get_total_tps_std(days: Optional[int] = None, limit: int = 1000, analyzed_only: bool = True) -> Optional[float]:
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    analyzed_cond = " AND analyzed = 1" if analyzed_only else ""
+    if days is not None:
+        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        c.execute(f"SELECT total_tps FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC LIMIT ?",
+                  (uid, since, limit))
+    else:
+        c.execute(f"SELECT total_tps FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+    values = [row[0] for row in c.fetchall() if row[0] is not None]
+    conn.close()
+    if not values or len(values) < 2:
+        return None
+    return round(_std_dev(values), 2)
+
+
+def get_total_steps_avg(days: Optional[int] = None, limit: int = 1000, analyzed_only: bool = True) -> Optional[float]:
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    analyzed_cond = " AND analyzed = 1" if analyzed_only else ""
+    if days is not None:
+        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        c.execute(f"SELECT total_steps FROM records WHERE user_id = ? AND date >= ?{analyzed_cond} ORDER BY date DESC LIMIT ?",
+                  (uid, since, limit))
+    else:
+        c.execute(f"SELECT total_steps FROM records WHERE user_id = ?{analyzed_cond} ORDER BY date DESC LIMIT ?", (uid, limit))
+    values = [row[0] for row in c.fetchall() if row[0] is not None]
+    conn.close()
+    if not values:
+        return None
+    return round(_trimmed_mean(values), 1)
+
+
+def get_record_count_by_period(days: Optional[int] = None) -> int:
+    """获取指定时段内的记录数（所有记录，不限是否分析）"""
     conn = _get_conn()
     c = conn.cursor()
     uid = _current_user_id if _current_user_id else 0
     if days is not None:
         since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("SELECT id FROM records WHERE user_id = ? AND date >= ? ORDER BY date DESC LIMIT ?",
-                  (uid, since, limit))
+        c.execute("SELECT COUNT(*) FROM records WHERE user_id = ? AND date >= ?",
+                  (uid, since))
     else:
-        c.execute("SELECT id FROM records WHERE user_id = ? ORDER BY date DESC LIMIT ?", (uid, limit))
-    record_ids = [row[0] for row in c.fetchall()]
-    if not record_ids:
-        conn.close()
-        return None
-    placeholders = ",".join("?" * len(record_ids))
-    c.execute(f"SELECT tps FROM phase_stats WHERE record_id IN ({placeholders})", record_ids)
-    tps_values = [row[0] for row in c.fetchall() if row[0] is not None]
+        c.execute("SELECT COUNT(*) FROM records WHERE user_id = ?", (uid,))
+    count = c.fetchone()[0]
     conn.close()
-    if not tps_values:
-        return None
-    return round(_trimmed_mean(tps_values), 2)
-
-
-def get_total_tps_std(days: Optional[int] = None, limit: int = 1000) -> Optional[float]:
-    conn = _get_conn()
-    c = conn.cursor()
-    uid = _current_user_id if _current_user_id else 0
-    if days is not None:
-        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        c.execute("SELECT id FROM records WHERE user_id = ? AND date >= ? ORDER BY date DESC LIMIT ?",
-                  (uid, since, limit))
-    else:
-        c.execute("SELECT id FROM records WHERE user_id = ? ORDER BY date DESC LIMIT ?", (uid, limit))
-    record_ids = [row[0] for row in c.fetchall()]
-    if not record_ids:
-        conn.close()
-        return None
-    placeholders = ",".join("?" * len(record_ids))
-    c.execute(f"SELECT tps FROM phase_stats WHERE record_id IN ({placeholders})", record_ids)
-    tps_values = [row[0] for row in c.fetchall() if row[0] is not None]
-    conn.close()
-    if not tps_values or len(tps_values) < 2:
-        return None
-    return round(_std_dev(tps_values), 2)
+    return count
 
 
 def find_record_id(scramble: str, solution: str, total_time: float) -> Optional[int]:
@@ -936,15 +963,16 @@ def import_cstimer(file_path: str, progress_cb=None) -> dict:
 
 
 def get_oll_pll_stats() -> dict:
-    """获取OLL和PLL各状态的出现次数、平均步数、平均用时、平均TPS、平均识别时间
+    """获取OLL和PLL各状态的出现次数、平均步数、平均用时、平均TPS、平均识别时间、步数标准差、用时标准差
 
     统计的是OLL/PLL阶段本身的步数、用时、TPS、观察时间（来自phase_stats表），
     而非整体还原的total_steps/total_time/total_tps。
 
     Returns:
         {
-            "oll": { "1": {"count": N, "avg_steps": X, "avg_time": Y, "avg_tps": Z, "avg_obs_time": W}, ... },
-            "pll": { "Aa": {"count": N, "avg_steps": X, "avg_time": Y, "avg_tps": Z, "avg_obs_time": W}, ... }
+            "oll": { "1": {"count": N, "avg_steps": X, "avg_time": Y, "avg_tps": Z,
+                           "avg_obs_time": W, "std_steps": S1, "std_time": S2}, ... },
+            "pll": { "Aa": {"count": N, ...}, ... }
         }
     """
     conn = _get_conn()
@@ -955,44 +983,62 @@ def get_oll_pll_stats() -> dict:
 
     # OLL统计 - 关联phase_stats获取OLL阶段的步数/用时/TPS/观察时间
     c.execute(
-        "SELECT r.oll_case, COUNT(*) as cnt, "
-        "AVG(p.steps) as avg_steps, AVG(p.time) as avg_time, AVG(p.tps) as avg_tps, "
-        "AVG(p.observation_time) as avg_obs_time "
+        "SELECT r.oll_case, p.steps, p.time, p.tps, p.observation_time "
         "FROM records r "
         "JOIN phase_stats p ON r.id = p.record_id AND p.phase = 'oll' "
-        "WHERE r.user_id = ? AND r.oll_case != '' AND r.oll_case IS NOT NULL "
-        "GROUP BY r.oll_case ORDER BY cnt DESC",
+        "WHERE r.user_id = ? AND r.oll_case != '' AND r.oll_case IS NOT NULL",
         (uid,)
     )
+    oll_data = {}
     for row in c.fetchall():
-        oll_case = row[0]
-        result["oll"][oll_case] = {
-            "count": row[1],
-            "avg_steps": round(row[2], 1) if row[2] else 0,
-            "avg_time": round(row[3], 2) if row[3] else 0,
-            "avg_tps": round(row[4], 1) if row[4] else 0,
-            "avg_obs_time": round(row[5], 2) if row[5] else 0,
+        case = row[0]
+        if case not in oll_data:
+            oll_data[case] = {"steps": [], "time": [], "tps": [], "obs_time": []}
+        oll_data[case]["steps"].append(row[1])
+        oll_data[case]["time"].append(row[2])
+        oll_data[case]["tps"].append(row[3])
+        oll_data[case]["obs_time"].append(row[4])
+
+    for case, d in sorted(oll_data.items(), key=lambda x: len(x[1]["steps"]), reverse=True):
+        cnt = len(d["steps"])
+        result["oll"][case] = {
+            "count": cnt,
+            "avg_steps": round(_trimmed_mean(d["steps"]), 1),
+            "avg_time": round(_trimmed_mean(d["time"]), 2),
+            "avg_tps": round(_trimmed_mean(d["tps"]), 1),
+            "avg_obs_time": round(_trimmed_mean(d["obs_time"]), 2),
+            "std_steps": round(_std_dev(d["steps"]), 1),
+            "std_time": round(_std_dev(d["time"]), 2),
         }
 
     # PLL统计 - 关联phase_stats获取PLL阶段的步数/用时/TPS/观察时间
     c.execute(
-        "SELECT r.pll_case, COUNT(*) as cnt, "
-        "AVG(p.steps) as avg_steps, AVG(p.time) as avg_time, AVG(p.tps) as avg_tps, "
-        "AVG(p.observation_time) as avg_obs_time "
+        "SELECT r.pll_case, p.steps, p.time, p.tps, p.observation_time "
         "FROM records r "
         "JOIN phase_stats p ON r.id = p.record_id AND p.phase = 'pll' "
-        "WHERE r.user_id = ? AND r.pll_case != '' AND r.pll_case IS NOT NULL "
-        "GROUP BY r.pll_case ORDER BY cnt DESC",
+        "WHERE r.user_id = ? AND r.pll_case != '' AND r.pll_case IS NOT NULL",
         (uid,)
     )
+    pll_data = {}
     for row in c.fetchall():
-        pll_case = row[0]
-        result["pll"][pll_case] = {
-            "count": row[1],
-            "avg_steps": round(row[2], 1) if row[2] else 0,
-            "avg_time": round(row[3], 2) if row[3] else 0,
-            "avg_tps": round(row[4], 1) if row[4] else 0,
-            "avg_obs_time": round(row[5], 2) if row[5] else 0,
+        case = row[0]
+        if case not in pll_data:
+            pll_data[case] = {"steps": [], "time": [], "tps": [], "obs_time": []}
+        pll_data[case]["steps"].append(row[1])
+        pll_data[case]["time"].append(row[2])
+        pll_data[case]["tps"].append(row[3])
+        pll_data[case]["obs_time"].append(row[4])
+
+    for case, d in sorted(pll_data.items(), key=lambda x: len(x[1]["steps"]), reverse=True):
+        cnt = len(d["steps"])
+        result["pll"][case] = {
+            "count": cnt,
+            "avg_steps": round(_trimmed_mean(d["steps"]), 1),
+            "avg_time": round(_trimmed_mean(d["time"]), 2),
+            "avg_tps": round(_trimmed_mean(d["tps"]), 1),
+            "avg_obs_time": round(_trimmed_mean(d["obs_time"]), 2),
+            "std_steps": round(_std_dev(d["steps"]), 1),
+            "std_time": round(_std_dev(d["time"]), 2),
         }
 
     conn.close()
