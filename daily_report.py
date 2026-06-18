@@ -18,6 +18,38 @@ from prompts import (
 log = logging.getLogger(__name__)
 
 
+def get_date_range_stats(start_date: str, end_date: str) -> Optional[Dict]:
+    """获取指定日期范围的统计数据，日期格式: YYYY-MM-DD"""
+    records = memory_db.get_records_by_date_range(start_date, end_date)
+    if not records:
+        return None
+
+    times = [r["total_time"] for r in records]
+    record_ids = [r["id"] for r in records]
+    phase_avgs = memory_db.get_today_phase_stats(record_ids)
+
+    avg_time = memory_db._trimmed_mean(times)
+    best_time = min(times)
+    worst_time = max(times)
+    std_time = memory_db._std_dev(times) if len(times) >= 2 else 0.0
+
+    ao12_results = _calc_ao12(times, records)
+
+    return {
+        "date": f"{start_date} ~ {end_date}",
+        "count": len(records),
+        "times": times,
+        "records": records,
+        "avg_time": round(avg_time, 2),
+        "std_time": round(std_time, 2),
+        "best_time": round(best_time, 2),
+        "worst_time": round(worst_time, 2),
+        "phase_avgs": phase_avgs,
+        "ao12_results": ao12_results,
+    }
+
+
+
 def get_today_stats() -> Optional[Dict]:
     records = memory_db.get_today_records()
     if not records:
@@ -77,7 +109,7 @@ def _calc_ao12(times: List[float], records: List[Dict] = None) -> Optional[Dict]
     }
 
 
-def generate_charts(times: List[float], save_dir: str = None) -> Tuple[str, str]:
+def generate_charts(times: List[float], save_dir: str = None, title_prefix: str = "今日") -> Tuple[str, str]:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -104,7 +136,7 @@ def generate_charts(times: List[float], save_dir: str = None) -> Tuple[str, str]
     ax1.axhline(y=avg, color="#e17055", linestyle="--", linewidth=1, label=f"平均 {avg:.2f}s")
     ax1.set_xlabel("还原序号")
     ax1.set_ylabel("时间 (s)")
-    ax1.set_title("今日还原时间折线图")
+    ax1.set_title(f"{title_prefix}还原时间折线图")
     ax1.legend(fontsize=8)
     ax1.grid(True, alpha=0.3)
     fig1.tight_layout()
@@ -117,7 +149,7 @@ def generate_charts(times: List[float], save_dir: str = None) -> Tuple[str, str]
     ax2.axvline(x=avg, color="#e17055", linestyle="--", linewidth=1, label=f"平均 {avg:.2f}s")
     ax2.set_xlabel("时间 (s)")
     ax2.set_ylabel("次数")
-    ax2.set_title("今日还原时间直方图")
+    ax2.set_title(f"{title_prefix}还原时间直方图")
     ax2.legend(fontsize=8)
     ax2.grid(True, alpha=0.3)
     fig2.tight_layout()
@@ -150,7 +182,9 @@ def _find_chinese_font() -> Optional[str]:
 
 def build_stats_text(stats: Dict) -> str:
     lines = []
-    lines.append(f"📅 今日练习总结 ({stats['date']})")
+    date_str = stats['date']
+    title_prefix = "训练总结" if "~" in date_str else "今日练习总结"
+    lines.append(f"📅 {title_prefix} ({date_str})")
     lines.append(f"{'=' * 40}")
     lines.append(f"")
     lines.append(f"总还原次数: {stats['count']}")

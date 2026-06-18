@@ -999,12 +999,22 @@ def get_oll_pll_stats() -> dict:
 
     result = {"oll": {}, "pll": {}}
 
-    # OLL统计 - 关联phase_stats获取OLL阶段的步数/用时/TPS/观察时间
+    # OLL统计 - 总出现次数（所有数据）
+    c.execute(
+        "SELECT oll_case, COUNT(*) FROM records "
+        "WHERE user_id = ? AND oll_case != '' AND oll_case IS NOT NULL "
+        "GROUP BY oll_case",
+        (uid,)
+    )
+    oll_total_counts = dict(c.fetchall())
+
+    # OLL统计 - 关联phase_stats获取OLL阶段的步数/用时/TPS/观察时间，限制最近1000次
     c.execute(
         "SELECT r.oll_case, p.steps, p.time, p.tps, p.observation_time "
         "FROM records r "
         "JOIN phase_stats p ON r.id = p.record_id AND p.phase = 'oll' "
-        "WHERE r.user_id = ? AND r.oll_case != '' AND r.oll_case IS NOT NULL",
+        "WHERE r.user_id = ? AND r.oll_case != '' AND r.oll_case IS NOT NULL "
+        "ORDER BY r.id DESC LIMIT 1000",
         (uid,)
     )
     oll_data = {}
@@ -1018,9 +1028,8 @@ def get_oll_pll_stats() -> dict:
         oll_data[case]["obs_time"].append(row[4])
 
     for case, d in sorted(oll_data.items(), key=lambda x: len(x[1]["steps"]), reverse=True):
-        cnt = len(d["steps"])
         result["oll"][case] = {
-            "count": cnt,
+            "count": oll_total_counts.get(case, len(d["steps"])),
             "avg_steps": round(_trimmed_mean(d["steps"]), 1),
             "avg_time": round(_trimmed_mean(d["time"]), 2),
             "avg_tps": round(_trimmed_mean(d["tps"]), 1),
@@ -1029,12 +1038,22 @@ def get_oll_pll_stats() -> dict:
             "std_time": round(_std_dev(d["time"]), 2),
         }
 
-    # PLL统计 - 关联phase_stats获取PLL阶段的步数/用时/TPS/观察时间
+    # PLL统计 - 总出现次数（所有数据）
+    c.execute(
+        "SELECT pll_case, COUNT(*) FROM records "
+        "WHERE user_id = ? AND pll_case != '' AND pll_case IS NOT NULL "
+        "GROUP BY pll_case",
+        (uid,)
+    )
+    pll_total_counts = dict(c.fetchall())
+
+    # PLL统计 - 关联phase_stats获取PLL阶段的步数/用时/TPS/观察时间，限制最近1000次
     c.execute(
         "SELECT r.pll_case, p.steps, p.time, p.tps, p.observation_time "
         "FROM records r "
         "JOIN phase_stats p ON r.id = p.record_id AND p.phase = 'pll' "
-        "WHERE r.user_id = ? AND r.pll_case != '' AND r.pll_case IS NOT NULL",
+        "WHERE r.user_id = ? AND r.pll_case != '' AND r.pll_case IS NOT NULL "
+        "ORDER BY r.id DESC LIMIT 1000",
         (uid,)
     )
     pll_data = {}
@@ -1048,9 +1067,8 @@ def get_oll_pll_stats() -> dict:
         pll_data[case]["obs_time"].append(row[4])
 
     for case, d in sorted(pll_data.items(), key=lambda x: len(x[1]["steps"]), reverse=True):
-        cnt = len(d["steps"])
         result["pll"][case] = {
-            "count": cnt,
+            "count": pll_total_counts.get(case, len(d["steps"])),
             "avg_steps": round(_trimmed_mean(d["steps"]), 1),
             "avg_time": round(_trimmed_mean(d["time"]), 2),
             "avg_tps": round(_trimmed_mean(d["tps"]), 1),
@@ -1072,6 +1090,26 @@ def get_today_records() -> List[Dict]:
         "SELECT id, date, scramble, solution, total_time, bottom_color "
         "FROM records WHERE user_id = ? AND date LIKE ? ORDER BY date ASC",
         (uid, f"{today}%")
+    )
+    records = []
+    for row in c.fetchall():
+        records.append({
+            "id": row[0], "date": row[1], "scramble": row[2],
+            "solution": row[3], "total_time": row[4], "bottom_color": row[5]
+        })
+    conn.close()
+    return records
+
+
+def get_records_by_date_range(start_date: str, end_date: str) -> List[Dict]:
+    """获取指定日期范围内的记录，日期格式: YYYY-MM-DD"""
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    c.execute(
+        "SELECT id, date, scramble, solution, total_time, bottom_color "
+        "FROM records WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date ASC",
+        (uid, start_date, end_date + "\uffff")
     )
     records = []
     for row in c.fetchall():

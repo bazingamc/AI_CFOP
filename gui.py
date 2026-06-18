@@ -15,7 +15,8 @@ from config import (
     THEME, HELP_TEXTS, PHASE_COLORS, PHASE_LABELS,
     ORIENTATION_OPTIONS, PHASE_ORDER,
     BOTTOM_COLOR_NAMES, BOTTOM_COLOR_OPTIONS, OPPOSITE_COLORS, COLOR_NAMES,
-    RESULT_DIR, SILICONFLOW_BASE_URL, APP_DIR
+    RESULT_DIR, SILICONFLOW_BASE_URL, APP_DIR,
+    OLL_ALGORITHMS, PLL_ALGORITHMS, OP_ALGO_CONFIG_FILE
 )
 
 from analyzer import CFOPAnalyzer
@@ -1543,30 +1544,9 @@ class CFOPAnalyzerGUI:
         ttk.Button(stats_header, text="🔄 刷新", command=self._refresh_home_stats,
                    style="Accent.TButton").pack(side=tk.RIGHT)
 
-        # 可滚动容器
-        canvas = tk.Canvas(tab, bg=THEME["bg"], highlightthickness=0)
-        scrollbar = ttk.Scrollbar(tab, orient=tk.VERTICAL, command=canvas.yview)
-        self._home_scroll_frame = tk.Frame(canvas, bg=THEME["bg"])
-
-        self._home_scroll_frame.bind("<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-
-        def _on_canvas_configure(event):
-            canvas.itemconfig(canvas_window, width=event.width)
-        canvas_window = canvas.create_window((0, 0), window=self._home_scroll_frame, anchor="nw")
-        canvas.bind("<Configure>", _on_canvas_configure)
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
-
-        # 鼠标滚轮绑定
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
-        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
-
-        self._home_canvas = canvas
+        # 内容容器（无滚动条，一页展示）
+        self._home_scroll_frame = tk.Frame(tab, bg=THEME["bg"])
+        self._home_scroll_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
         self._refresh_home_stats()
 
@@ -1595,23 +1575,23 @@ class CFOPAnalyzerGUI:
                         highlightthickness=1, highlightbackground=color)
         card.pack(side=tk.LEFT, padx=(0, 6), pady=2, fill=tk.BOTH, expand=True)
 
-        tk.Label(card, text=label, font=("Microsoft YaHei", 9, "bold"),
+        tk.Label(card, text=label, font=("Microsoft YaHei", 11, "bold"),
                  bg=light_bg, fg=color).pack(anchor="w")
 
-        time_str = f"{data['time']:.2f}s"
-        tk.Label(card, text=time_str, font=("Microsoft YaHei", 14, "bold"),
+        time_str = f"{data['time'] + data['observation_time']:.2f}s"
+        tk.Label(card, text=time_str, font=("Microsoft YaHei", 16, "bold"),
                  bg=light_bg, fg=THEME["fg"]).pack(anchor="w")
 
         detail = f"{data['steps']:.1f}步  {data['tps']:.1f}TPS"
-        tk.Label(card, text=detail, font=("Microsoft YaHei", 8),
+        tk.Label(card, text=detail, font=("Microsoft YaHei", 10),
                  bg=light_bg, fg="#666666").pack(anchor="w")
 
         obs_str = f"观察 {data['observation_time']:.2f}s"
-        tk.Label(card, text=obs_str, font=("Microsoft YaHei", 8),
+        tk.Label(card, text=obs_str, font=("Microsoft YaHei", 10),
                  bg=light_bg, fg="#666666").pack(anchor="w")
 
         std_str = f"σ步{data['steps_std']:.1f} σ时{data['time_std']:.2f}"
-        tk.Label(card, text=std_str, font=("Microsoft YaHei", 7),
+        tk.Label(card, text=std_str, font=("Microsoft YaHei", 9),
                  bg=light_bg, fg="#aaaaaa").pack(anchor="w")
 
         return card
@@ -1683,7 +1663,7 @@ class CFOPAnalyzerGUI:
         phase_section = tk.Frame(parent, bg=THEME["bg"])
         phase_section.pack(fill=tk.X, pady=(0, 8))
 
-        tk.Label(phase_section, text="各阶段统计", font=("Microsoft YaHei", 10, "bold"),
+        tk.Label(phase_section, text="各阶段统计（最近1000次）", font=("Microsoft YaHei", 10, "bold"),
                  bg=THEME["bg"], fg=THEME["fg"]).pack(anchor="w", pady=(0, 4))
 
         row1 = tk.Frame(phase_section, bg=THEME["bg"])
@@ -1839,27 +1819,99 @@ class CFOPAnalyzerGUI:
         count = memory_db.get_record_count()
         footer = tk.Frame(parent, bg=THEME["bg"])
         footer.pack(fill=tk.X, pady=(0, 4))
-        tk.Label(footer, text=f"📋 {count}条记录  |  📅 {date_range}  |  统计范围: 最近1000次",
+        tk.Label(footer, text=f"📋 {count}条记录  |  📅 {date_range}",
                  font=("Microsoft YaHei", 8), bg=THEME["bg"], fg="#aaaaaa").pack(anchor="w")
+
+        # 刷新训练列表
+        if hasattr(self, '_refresh_training_lists'):
+            self._refresh_training_lists()
 
     def _build_training_tab(self):
         tab = self._tab_training
 
-        train_header = ttk.Frame(tab)
+        # 可滚动容器
+        canvas = tk.Canvas(tab, bg=THEME["bg"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(tab, orient=tk.VERTICAL, command=canvas.yview)
+        self._train_scroll_frame = tk.Frame(canvas, bg=THEME["bg"])
+
+        self._train_scroll_frame.bind("<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas_window = canvas.create_window((0, 0), window=self._train_scroll_frame, anchor="nw")
+
+        def _on_canvas_configure(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 鼠标滚轮支持
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        parent = self._train_scroll_frame
+
+        train_header = ttk.Frame(parent)
         train_header.pack(fill=tk.X, pady=(8, 2), padx=8)
         ttk.Label(train_header, text="  🎯 智能训练", font=("Microsoft YaHei", 11, "bold"),
                   foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
 
-        train_frame = tk.Frame(tab, bg=THEME["card_bg"], padx=12, pady=12,
-                                highlightthickness=1, highlightbackground=THEME["border"])
-        train_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+        # === OLL训练部分 ===
+        oll_header = ttk.Frame(parent)
+        oll_header.pack(fill=tk.X, pady=(8, 2), padx=8)
+        ttk.Label(oll_header, text="  OLL训练", font=("Microsoft YaHei", 10, "bold"),
+                  foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
+        ttk.Button(oll_header, text="📈 OLL统计", command=self._show_oll_stats,
+                   style="Accent.TButton").pack(side=tk.RIGHT, padx=(4, 0))
 
-        ttk.Button(train_frame, text="📊 今日训练总结", command=self._show_daily_report,
+        self._oll_train_frame = tk.Frame(parent, bg=THEME["card_bg"], padx=12, pady=8,
+                                          highlightthickness=1, highlightbackground=THEME["border"])
+        self._oll_train_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
+
+        # === PLL训练部分 ===
+        pll_header = ttk.Frame(parent)
+        pll_header.pack(fill=tk.X, pady=(8, 2), padx=8)
+        ttk.Label(pll_header, text="  PLL训练", font=("Microsoft YaHei", 10, "bold"),
+                  foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
+        ttk.Button(pll_header, text="📈 PLL统计", command=self._show_pll_stats,
+                   style="Accent.TButton").pack(side=tk.RIGHT, padx=(4, 0))
+
+        self._pll_train_frame = tk.Frame(parent, bg=THEME["card_bg"], padx=12, pady=8,
+                                          highlightthickness=1, highlightbackground=THEME["border"])
+        self._pll_train_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
+
+        # === 训练总结部分 ===
+        summary_header = ttk.Frame(parent)
+        summary_header.pack(fill=tk.X, pady=(8, 2), padx=8)
+        ttk.Label(summary_header, text="  训练总结", font=("Microsoft YaHei", 10, "bold"),
+                  foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
+
+        summary_ctrl = tk.Frame(parent, bg=THEME["card_bg"], padx=12, pady=8,
+                                 highlightthickness=1, highlightbackground=THEME["border"])
+        summary_ctrl.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+        tk.Label(summary_ctrl, text="起始日期:", bg=THEME["card_bg"],
+                 fg=THEME["fg"], font=("Microsoft YaHei", 9)).pack(side=tk.LEFT)
+        self._summary_start_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+        self._summary_start_entry = ttk.Entry(summary_ctrl, textvariable=self._summary_start_var,
+                                                width=12, font=("Microsoft YaHei", 9))
+        self._summary_start_entry.pack(side=tk.LEFT, padx=(4, 8))
+
+        tk.Label(summary_ctrl, text="结束日期:", bg=THEME["card_bg"],
+                 fg=THEME["fg"], font=("Microsoft YaHei", 9)).pack(side=tk.LEFT)
+        self._summary_end_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+        self._summary_end_entry = ttk.Entry(summary_ctrl, textvariable=self._summary_end_var,
+                                              width=12, font=("Microsoft YaHei", 9))
+        self._summary_end_entry.pack(side=tk.LEFT, padx=(4, 8))
+
+        ttk.Button(summary_ctrl, text="📊 生成训练总结", command=self._show_date_range_report,
                    style="Accent.TButton").pack(side=tk.LEFT)
-        ttk.Button(train_frame, text="📈 OLL统计", command=self._show_oll_stats,
-                   style="Accent.TButton").pack(side=tk.LEFT, padx=(12, 0))
-        ttk.Button(train_frame, text="📈 PLL统计", command=self._show_pll_stats,
-                   style="Accent.TButton").pack(side=tk.LEFT, padx=(12, 0))
+
+        # 初始化时填充训练列表
+        self._refresh_training_lists()
 
     def _build_analysis_tab(self):
         tab = self._tab_analysis
@@ -4380,6 +4432,189 @@ class CFOPAnalyzerGUI:
         self.result_text.delete(1.0, tk.END)
         self.result_text.insert(tk.END, f"分析失败: {error_msg}")
 
+    def _refresh_training_lists(self):
+        """刷新OLL/PLL训练列表，显示带标签的case"""
+        stats = memory_db.get_oll_pll_stats()
+
+        # OLL训练列表
+        oll_data = stats.get("oll", {})
+        oll_tags = self._compute_op_case_tags(oll_data, OLL_ALGORITHMS, "oll")
+        self._fill_training_frame(self._oll_train_frame, oll_data, oll_tags, "oll")
+
+        # PLL训练列表
+        pll_data = stats.get("pll", {})
+        pll_tags = self._compute_op_case_tags(pll_data, PLL_ALGORITHMS, "pll")
+        self._fill_training_frame(self._pll_train_frame, pll_data, pll_tags, "pll")
+
+    def _fill_training_frame(self, frame, data, tags, op_type):
+        """填充训练列表：只显示有标签的case，按标签数和出现次数排序，一行两个"""
+        # 清空现有内容
+        for w in frame.winfo_children():
+            w.destroy()
+
+        # 筛选有标签的case
+        tagged_cases = []
+        for case_name, case_tags in tags.items():
+            if case_tags and case_name != "skip":
+                tagged_cases.append((case_name, case_tags))
+
+        if not tagged_cases:
+            tk.Label(frame, text="暂无需要重点训练的case", bg=THEME["card_bg"],
+                     fg="#888888", font=("Microsoft YaHei", 9)).pack(anchor="w")
+            return
+
+        # 排序：标签数多的靠前，标签相同则出现次数多的靠前
+        tagged_cases.sort(key=lambda x: (-len(x[1]), -data.get(x[0], {}).get("count", 0)))
+
+        # 图片目录
+        img_dir = os.path.join(APP_DIR, "png", "OLL" if op_type == "oll" else "PLL")
+
+        # 加载公式配置
+        algo_config = self._load_op_algo_config()
+        algo_db = OLL_ALGORITHMS if op_type == "oll" else PLL_ALGORITHMS
+
+        # 保存图片引用防止GC
+        photo_refs = []
+
+        def _get_display_algo(case_name):
+            key = f"{op_type}_{case_name}"
+            selected_idx = algo_config.get(key, 0)
+            algos = algo_db.get(case_name, [])
+            custom_key = f"{op_type}_{case_name}_custom"
+            custom_list = algo_config.get(custom_key, [])
+            all_algos = algos + custom_list
+            if selected_idx < len(all_algos):
+                return all_algos[selected_idx]
+            return algos[0] if algos else ""
+
+        def _get_rotation_from_algo(algo_str):
+            import re as _re
+            m = _re.match(r"^(U2?|U'|y2?|y')\s*", algo_str)
+            if not m:
+                return 0, algo_str
+            prefix = m.group(1).strip()
+            rest = algo_str[m.end():]
+            rotation_map = {"U": 90, "U'": -90, "U2": 180, "y": 90, "y'": -90, "y2": 180}
+            return rotation_map.get(prefix, 0), rest
+
+        def _rotate_image(pil_img, angle):
+            if angle == 0:
+                return pil_img
+            return pil_img.rotate(-angle, expand=True)
+
+        # 一行四个case
+        row_frame = None
+        for i, (case_name, case_tags) in enumerate(tagged_cases):
+            if i % 4 == 0:
+                row_frame = tk.Frame(frame, bg=THEME["card_bg"])
+                row_frame.pack(fill=tk.X, pady=2)
+
+            case_data = data.get(case_name, {})
+            tag_count = len(case_tags)
+
+            # 背景色
+            if tag_count >= 3:
+                card_bg = "#ffcccc"
+            elif tag_count == 2:
+                card_bg = "#ffe0e0"
+            else:
+                card_bg = "#fff8dc"
+
+            # 单个case卡片 - 固定宽度保持对齐
+            card = tk.Frame(row_frame, bg=card_bg, padx=6, pady=4,
+                            highlightthickness=1, highlightbackground="#ddd",
+                            width=160)
+            card.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+            card.pack_propagate(False)
+            card.configure(height=100)
+
+            # 上半部分：图片 + 名称/标签
+            top_row = tk.Frame(card, bg=card_bg)
+            top_row.pack(fill=tk.X)
+
+            # 图片
+            if op_type == "oll":
+                img_path = os.path.join(img_dir, f"OLL{case_name}.png")
+            else:
+                img_path = os.path.join(img_dir, f"PLL {case_name}.png")
+
+            img_loaded = False
+            if os.path.isfile(img_path):
+                try:
+                    from PIL import Image as PILImage, ImageTk
+                    pil_img = PILImage.open(img_path)
+                    display_algo = _get_display_algo(case_name)
+                    angle, _ = _get_rotation_from_algo(display_algo)
+                    pil_img = _rotate_image(pil_img, angle)
+                    pil_img.thumbnail((60, 60), PILImage.LANCZOS)
+                    photo = ImageTk.PhotoImage(pil_img)
+                    photo_refs.append(photo)
+                    img_label = tk.Label(top_row, image=photo, bg=card_bg)
+                    img_label.pack(side=tk.LEFT, padx=(0, 4))
+                    img_loaded = True
+                except Exception:
+                    img_loaded = False
+
+            if not img_loaded:
+                tk.Label(top_row, text=f"OLL\n{case_name}" if op_type == "oll" else f"PLL\n{case_name}",
+                         font=("Microsoft YaHei", 8, "bold"), bg=card_bg,
+                         fg=THEME["accent"], width=5).pack(side=tk.LEFT, padx=(0, 4))
+
+            # 名称和标签
+            name_tag_frame = tk.Frame(top_row, bg=card_bg)
+            name_tag_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            case_title = f"OLL-{case_name}" if op_type == "oll" else f"PLL-{case_name}"
+            tk.Label(name_tag_frame, text=case_title, font=("Microsoft YaHei", 9, "bold"),
+                     bg=card_bg, fg="#2d3436").pack(anchor="w")
+
+            tag_row = tk.Frame(name_tag_frame, bg=card_bg)
+            tag_row.pack(anchor="w")
+            for tag in case_tags:
+                tk.Label(tag_row, text=tag, font=("Microsoft YaHei", 7, "bold"),
+                         bg="#ffcccc", fg="#c0392b", padx=2, pady=0).pack(side=tk.LEFT, padx=(0, 2))
+
+            # 下半部分：推荐公式
+            display_algo = _get_display_algo(case_name)
+            _, algo_clean = _get_rotation_from_algo(display_algo)
+            if algo_clean:
+                algo_row = tk.Frame(card, bg=card_bg)
+                algo_row.pack(fill=tk.X, pady=(2, 0))
+                tk.Label(algo_row, text="推荐:", font=("Microsoft YaHei", 7),
+                         bg=card_bg, fg="#888888").pack(side=tk.LEFT)
+                tk.Label(algo_row, text=algo_clean, font=("Consolas", 8),
+                         bg=card_bg, fg="#6c5ce7").pack(side=tk.LEFT, padx=(2, 0))
+
+        # 保存图片引用到frame防止GC
+        frame._photo_refs = photo_refs
+
+    def _show_date_range_report(self):
+        """按日期范围生成训练总结"""
+        import daily_report
+
+        start_date = self._summary_start_var.get().strip()
+        end_date = self._summary_end_var.get().strip()
+
+        # 校验日期格式
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+            datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            messagebox.showwarning("日期格式错误", "请输入正确的日期格式：YYYY-MM-DD")
+            return
+
+        if start_date > end_date:
+            messagebox.showwarning("日期范围错误", "起始日期不能晚于结束日期")
+            return
+
+        stats = daily_report.get_date_range_stats(start_date, end_date)
+        if not stats:
+            messagebox.showinfo("训练总结", f"{start_date} ~ {end_date} 暂无练习数据。")
+            return
+
+        # 复用 _show_daily_report 的弹窗逻辑，但传入自定义stats
+        self._show_report_dialog(stats)
+
     def _show_daily_report(self):
         import daily_report
 
@@ -4388,8 +4623,14 @@ class CFOPAnalyzerGUI:
             messagebox.showinfo("今日总结", "今日暂无练习数据。")
             return
 
+        self._show_report_dialog(stats)
+
+    def _show_report_dialog(self, stats):
+        """通用训练总结弹窗，支持今日或日期范围"""
+        import daily_report
+
         win = tk.Toplevel(self.root)
-        win.title(f"今日练习总结 ({stats['date']})")
+        win.title(f"训练总结 ({stats['date']})")
         win.geometry("720x820")
         win.configure(bg=THEME["bg"])
         win.resizable(True, True)
@@ -4448,7 +4689,8 @@ class CFOPAnalyzerGUI:
         report_text.config(state="disabled")
 
         try:
-            line_path, hist_path = daily_report.generate_charts(stats["times"])
+            chart_title = "训练" if "~" in stats.get("date", "") else "今日"
+            line_path, hist_path = daily_report.generate_charts(stats["times"], title_prefix=chart_title)
             chart_inner = tk.Frame(chart_frame, bg=THEME["card_bg"])
             chart_inner.pack(fill=tk.X, padx=8, pady=8)
 
@@ -4669,7 +4911,7 @@ class CFOPAnalyzerGUI:
                     summary_result = _stream_step(
                         api_key, model,
                         lambda ak, md: daily_report.call_ai_summary_stream(ak, md, stats),
-                        "⏳ 正在总结今日练习..."
+                        "⏳ 正在总结训练数据..."
                     )
                     ai_summary_holder["text"] = summary_result
 
@@ -4842,12 +5084,12 @@ class CFOPAnalyzerGUI:
 
         Args:
             title: 弹窗标题
-            data: 统计数据 {case_name: {count, avg_steps, avg_time, avg_tps}}
+            data: 统计数据 {case_name: {count, avg_steps, avg_time, avg_tps, avg_obs_time, std_steps, std_time}}
             op_type: "oll" 或 "pll"
         """
         win = tk.Toplevel(self.root)
         win.title(title)
-        win.geometry("900x700")
+        win.geometry("850x700")
         win.configure(bg=THEME["bg"])
         win.resizable(True, True)
         win.transient(self.root)
@@ -4856,6 +5098,13 @@ class CFOPAnalyzerGUI:
 
         main_frame = tk.Frame(win, bg=THEME["bg"], padx=12, pady=8)
         main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 加载公式配置
+        algo_config = self._load_op_algo_config()
+        algo_db = OLL_ALGORITHMS if op_type == "oll" else PLL_ALGORITHMS
+
+        # 计算 Z-score 评分标签
+        case_tags = self._compute_op_case_tags(data, algo_db, op_type)
 
         # 顶部统计概要
         total_count = sum(d["count"] for d in data.values())
@@ -4898,31 +5147,74 @@ class CFOPAnalyzerGUI:
 
         scroll_frame.bind("<Configure>",
                           lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+
+        def _on_canvas_configure(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
         canvas.configure(yscrollcommand=scrollbar.set)
 
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # 鼠标滚轮支持
+        # 鼠标滚轮支持（Enter/Leave绑定避免冲突）
         def _on_mousewheel(event):
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
         win.protocol("WM_DELETE_WINDOW", lambda: (canvas.unbind_all("<MouseWheel>"), win.destroy()))
 
-        # 保存图片引用防止GC
-        _photo_refs = []
+        # 保存图片引用防止GC（绑定到窗口对象）
+        win._photo_refs = []
+
+        def _get_selected_algo(case_name):
+            """获取用户选择的公式索引，默认0（第一个公式）"""
+            key = f"{op_type}_{case_name}"
+            return algo_config.get(key, 0)
+
+        def _get_display_algo(case_name):
+            """获取当前case要显示的公式文本"""
+            key = f"{op_type}_{case_name}"
+            selected_idx = algo_config.get(key, 0)
+            algos = algo_db.get(case_name, [])
+            custom_key = f"{op_type}_{case_name}_custom"
+            custom_list = algo_config.get(custom_key, [])
+            all_algos = algos + custom_list
+            if selected_idx < len(all_algos):
+                return all_algos[selected_idx]
+            return algos[0] if algos else ""
+
+        def _get_rotation_from_algo(algo_str):
+            """从公式开头提取旋转操作，返回(旋转角度, 剩余公式)
+            U=90°顺时针, U'=90°逆时针, U2=180°, y=90°顺时针, y'=90°逆时针, y2=180°
+            """
+            import re as _re
+            # 匹配开头的 U/U'/U2/y/y'/y2
+            m = _re.match(r"^(U2?|U'|y2?|y')\s*", algo_str)
+            if not m:
+                return 0, algo_str
+            prefix = m.group(1).strip()
+            rest = algo_str[m.end():]
+            rotation_map = {"U": 90, "U'": -90, "U2": 180, "y": 90, "y'": -90, "y2": 180}
+            return rotation_map.get(prefix, 0), rest
+
+        def _rotate_image(pil_img, angle):
+            """旋转PIL图片"""
+            if angle == 0:
+                return pil_img
+            return pil_img.rotate(-angle, expand=True)  # PIL逆时针为正，所以取反
 
         def _render_list():
             for w in scroll_frame.winfo_children():
                 w.destroy()
-            _photo_refs.clear()
+            win._photo_refs.clear()
 
             sort_key = sort_key_var.get()
             reverse = sort_order_var.get() == "降序"
 
             key_map = {
-                "序号": lambda x: (int(x[0]) if op_type == "oll" and x[0].isdigit() else x[0]),
+                "序号": lambda x: (0, int(x[0])) if x[0].isdigit() else (1, x[0]),
                 "出现次数": lambda x: x[1]["count"],
                 "步数": lambda x: x[1]["avg_steps"],
                 "用时": lambda x: x[1]["avg_time"],
@@ -4933,12 +5225,23 @@ class CFOPAnalyzerGUI:
             sorted_cases = sorted(data.items(), key=sort_func, reverse=reverse)
 
             for case_name, case_data in sorted_cases:
-                row_frame = tk.Frame(scroll_frame, bg=THEME["card_bg"], padx=8, pady=6,
+                # 根据标签数量决定背景色
+                tags = case_tags.get(case_name, [])
+                if len(tags) >= 3:
+                    row_bg = "#ffcccc"
+                elif len(tags) == 2:
+                    row_bg = "#ffe0e0"
+                elif len(tags) == 1:
+                    row_bg = "#fff8dc"
+                else:
+                    row_bg = THEME["card_bg"]
+
+                row_frame = tk.Frame(scroll_frame, bg=row_bg, padx=8, pady=6,
                                       highlightthickness=1, highlightbackground=THEME["border"])
                 row_frame.pack(fill=tk.X, padx=4, pady=3)
 
                 # 图片区域 - 固定宽度容器确保对齐
-                img_container = tk.Frame(row_frame, bg=THEME["card_bg"], width=70, height=60)
+                img_container = tk.Frame(row_frame, bg=row_bg, width=70, height=60)
                 img_container.pack(side=tk.LEFT, padx=(0, 10))
                 img_container.pack_propagate(False)
 
@@ -4952,10 +5255,14 @@ class CFOPAnalyzerGUI:
                     try:
                         from PIL import Image as PILImage, ImageTk
                         pil_img = PILImage.open(img_path)
+                        # 根据选中公式的旋转操作旋转图片
+                        display_algo = _get_display_algo(case_name)
+                        angle, _ = _get_rotation_from_algo(display_algo)
+                        pil_img = _rotate_image(pil_img, angle)
                         pil_img.thumbnail((60, 60), PILImage.LANCZOS)
                         photo = ImageTk.PhotoImage(pil_img)
-                        _photo_refs.append(photo)
-                        img_label = tk.Label(img_container, image=photo, bg=THEME["card_bg"])
+                        win._photo_refs.append(photo)
+                        img_label = tk.Label(img_container, image=photo, bg=row_bg)
                         img_label.pack(expand=True)
                         img_loaded = True
                     except Exception:
@@ -4964,18 +5271,34 @@ class CFOPAnalyzerGUI:
                 if not img_loaded:
                     tk.Label(img_container,
                              text=f"OLL {case_name}" if op_type == "oll" else f"PLL {case_name}",
-                             font=("Microsoft YaHei", 10, "bold"), bg=THEME["card_bg"],
+                             font=("Microsoft YaHei", 10, "bold"), bg=row_bg,
                              fg=THEME["accent"]).pack(expand=True)
 
-                # 统计信息
-                info_frame = tk.Frame(row_frame, bg=THEME["card_bg"])
+                # 中间统计信息
+                info_frame = tk.Frame(row_frame, bg=row_bg)
                 info_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-                case_title = f"OLL-{case_name}" if op_type == "oll" else f"PLL-{case_name}"
-                tk.Label(info_frame, text=case_title,
-                         font=("Microsoft YaHei", 11, "bold"), bg=THEME["card_bg"],
-                         fg=THEME["fg"]).pack(anchor="w")
+                # 标题行：case名称 + 公式
+                title_frame = tk.Frame(info_frame, bg=row_bg)
+                title_frame.pack(fill=tk.X)
 
+                case_title = f"OLL-{case_name}" if op_type == "oll" else f"PLL-{case_name}"
+                tk.Label(title_frame, text=case_title,
+                         font=("Microsoft YaHei", 11, "bold"), bg=row_bg,
+                         fg=THEME["fg"]).pack(side=tk.LEFT)
+
+                # 显示选中的公式（去掉开头的U/y旋转步，因为图片已旋转）
+                display_algo = _get_display_algo(case_name)
+                _, display_algo_clean = _get_rotation_from_algo(display_algo)
+                if display_algo_clean:
+                    tk.Label(title_frame, text="  推荐公式 ",
+                             font=("Microsoft YaHei", 9), bg=row_bg,
+                             fg="#888888").pack(side=tk.LEFT)
+                    tk.Label(title_frame, text=display_algo_clean,
+                             font=("Consolas", 10), bg=row_bg,
+                             fg="#6c5ce7").pack(side=tk.LEFT)
+
+                # 统计文本
                 stats_text = (
                     f"出现次数: {case_data['count']}    "
                     f"平均步数: {case_data['avg_steps']}(σ{case_data['std_steps']})    "
@@ -4984,8 +5307,26 @@ class CFOPAnalyzerGUI:
                     f"平均TPS: {case_data['avg_tps']}"
                 )
                 tk.Label(info_frame, text=stats_text,
-                         font=("Microsoft YaHei", 9), bg=THEME["card_bg"],
+                         font=("Microsoft YaHei", 9), bg=row_bg,
                          fg="#636e72").pack(anchor="w")
+
+                # 标签行
+                if tags:
+                    tag_frame = tk.Frame(info_frame, bg=row_bg)
+                    tag_frame.pack(fill=tk.X, pady=(2, 0))
+                    for tag_text in tags:
+                        tk.Label(tag_frame, text=tag_text,
+                                 font=("Microsoft YaHei", 8, "bold"),
+                                 bg="#ffcccc", fg="#c0392b",
+                                 padx=4, pady=1).pack(side=tk.LEFT, padx=(0, 4))
+
+                # 右侧"更多公式"按钮
+                btn_container = tk.Frame(row_frame, bg=row_bg)
+                btn_container.pack(side=tk.RIGHT, padx=(8, 0))
+                ttk.Button(btn_container, text="更多公式",
+                           command=lambda cn=case_name: self._show_algo_dialog(
+                               win, cn, op_type, algo_db, algo_config, _render_list),
+                           style="Accent.TButton").pack()
 
             canvas.yview_moveto(0)
 
@@ -5002,6 +5343,337 @@ class CFOPAnalyzerGUI:
         ttk.Button(btn_frame, text="关闭",
                    command=lambda: (canvas.unbind_all("<MouseWheel>"), win.destroy()),
                    style="Secondary.TButton").pack(side=tk.RIGHT)
+
+    def _load_op_algo_config(self):
+        """加载OP公式选择配置"""
+        try:
+            if os.path.isfile(OP_ALGO_CONFIG_FILE):
+                with open(OP_ALGO_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception:
+            pass
+        return {}
+
+    def _save_op_algo_config(self, config):
+        """保存OP公式选择配置"""
+        try:
+            with open(OP_ALGO_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _show_algo_dialog(self, parent_win, case_name, op_type, algo_db, algo_config, refresh_callback):
+        """显示某个case的所有公式弹窗"""
+        from PIL import Image as PILImage, ImageTk
+
+        dialog = tk.Toplevel(parent_win)
+        case_title = f"OLL-{case_name}" if op_type == "oll" else f"PLL-{case_name}"
+        dialog.title(f"{case_title} 公式")
+        dialog.geometry("700x600")
+        dialog.configure(bg=THEME["bg"])
+        dialog.transient(parent_win)
+        dialog.grab_set()
+        self._center_window(dialog)
+
+        img_dir = os.path.join(APP_DIR, "png", "OLL" if op_type == "oll" else "PLL")
+
+        # 获取公式列表
+        base_algos = algo_db.get(case_name, [])
+        custom_key = f"{op_type}_{case_name}_custom"
+        custom_algos = list(algo_config.get(custom_key, []))
+        selected_key = f"{op_type}_{case_name}"
+        selected_idx = algo_config.get(selected_key, 0)
+
+        # 按旋转分组
+        def _get_rotation_label(algo_str):
+            m = re.match(r"^(U2?|U'|y2?|y')\s*", algo_str)
+            if not m:
+                return 0, "原始图片", algo_str
+            prefix = m.group(1).strip()
+            label_map = {
+                "U": "顺时针旋转90°", "U'": "逆时针旋转90°", "U2": "旋转180°",
+                "y": "顺时针旋转90°", "y'": "逆时针旋转90°", "y2": "旋转180°"
+            }
+            rotation_map = {"U": 90, "U'": -90, "U2": 180, "y": 90, "y'": -90, "y2": 180}
+            rest = algo_str[m.end():]
+            return rotation_map.get(prefix, 0), label_map.get(prefix, "原始图片"), rest
+
+        # 分组：按旋转角度
+        groups = {}  # angle -> {"label": str, "algos": [(idx, algo_str, algo_clean)]}
+        for i, algo in enumerate(base_algos):
+            angle, label, algo_clean = _get_rotation_label(algo)
+            if angle not in groups:
+                groups[angle] = {"label": label, "algos": []}
+            groups[angle]["algos"].append((i, algo, algo_clean))
+
+        # 主体区域（可滚动 + 底部按钮）
+        body_frame = tk.Frame(dialog, bg=THEME["bg"])
+        body_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 可滚动区域
+        canvas = tk.Canvas(body_frame, bg=THEME["bg"], highlightthickness=0)
+        scrollbar = ttk.Scrollbar(body_frame, orient=tk.VERTICAL, command=canvas.yview)
+        scroll_frame = tk.Frame(canvas, bg=THEME["bg"])
+        scroll_frame.bind("<Configure>",
+                          lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas_window = canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+
+        def _on_canvas_configure(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8, pady=(8, 0))
+
+        # 鼠标滚轮支持（Enter/Leave绑定避免冲突）
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        # 图片引用绑定到dialog窗口，防止GC回收
+        dialog._photo_refs = []
+        check_vars = {}  # idx -> BooleanVar
+
+        # 加载原始图片
+        if op_type == "oll":
+            img_path = os.path.join(img_dir, f"OLL{case_name}.png")
+        else:
+            img_path = os.path.join(img_dir, f"PLL {case_name}.png")
+
+        base_pil_img = None
+        if os.path.isfile(img_path):
+            try:
+                base_pil_img = PILImage.open(img_path)
+            except Exception:
+                base_pil_img = None
+
+        # 按旋转角度分组显示
+        for angle in sorted(groups.keys()):
+            group = groups[angle]
+
+            group_frame = tk.Frame(scroll_frame, bg=THEME["card_bg"], padx=10, pady=6,
+                                    highlightthickness=1, highlightbackground=THEME["border"])
+            group_frame.pack(fill=tk.X, padx=4, pady=4)
+
+            # 左侧：旋转后的图片
+            left_frame = tk.Frame(group_frame, bg=THEME["card_bg"])
+            left_frame.pack(side=tk.LEFT, padx=(0, 10))
+
+            img_loaded = False
+            if base_pil_img:
+                try:
+                    rotated = base_pil_img.rotate(-angle, expand=True) if angle else base_pil_img.copy()
+                    rotated.thumbnail((65, 65), PILImage.LANCZOS)
+                    photo = ImageTk.PhotoImage(rotated)
+                    dialog._photo_refs.append(photo)
+                    img_label = tk.Label(left_frame, image=photo, bg=THEME["card_bg"])
+                    img_label.pack()
+                    img_loaded = True
+                except Exception:
+                    img_loaded = False
+
+            if not img_loaded:
+                tk.Label(left_frame, text=case_title,
+                         font=("Microsoft YaHei", 9, "bold"), bg=THEME["card_bg"],
+                         fg=THEME["accent"], width=8, height=4).pack()
+
+            # 右侧：公式列表
+            right_frame = tk.Frame(group_frame, bg=THEME["card_bg"])
+            right_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            for idx, algo, algo_clean in group["algos"]:
+                row = tk.Frame(right_frame, bg=THEME["card_bg"])
+                row.pack(fill=tk.X, pady=1)
+                var = tk.BooleanVar(value=(idx == selected_idx))
+                check_vars[idx] = var
+                tk.Checkbutton(row, variable=var, bg=THEME["card_bg"],
+                               activebackground=THEME["card_bg"]).pack(side=tk.LEFT)
+                # 推荐公式（第一个）显示蓝色，其他黑色
+                algo_fg = "#6c5ce7" if idx == 0 else "#2d3436"
+                prefix_text = "★ " if idx == 0 else ""
+                # 显示去掉开头U/y旋转步的公式（图片已旋转展示）
+                display_text = algo_clean if algo_clean else algo
+                tk.Label(row, text=f"{prefix_text}{display_text}", font=("Consolas", 9),
+                         bg=THEME["card_bg"], fg=algo_fg).pack(side=tk.LEFT, padx=(4, 0))
+
+        # 自定义公式区域
+        custom_frame = tk.Frame(scroll_frame, bg=THEME["card_bg"], padx=10, pady=6,
+                                 highlightthickness=1, highlightbackground=THEME["border"])
+        custom_frame.pack(fill=tk.X, padx=4, pady=4)
+
+        tk.Label(custom_frame, text="自定义公式",
+                 font=("Microsoft YaHei", 10, "bold"), bg=THEME["card_bg"],
+                 fg=THEME["fg"]).pack(anchor="w")
+
+        # 显示已有的自定义公式
+        custom_check_vars = {}  # idx -> BooleanVar
+        custom_start_idx = len(base_algos)
+
+        for ci, custom_algo in enumerate(custom_algos):
+            row = tk.Frame(custom_frame, bg=THEME["card_bg"])
+            row.pack(fill=tk.X, pady=1)
+            var = tk.BooleanVar(value=((custom_start_idx + ci) == selected_idx))
+            custom_check_vars[custom_start_idx + ci] = var
+            tk.Checkbutton(row, variable=var, bg=THEME["card_bg"],
+                           activebackground=THEME["card_bg"]).pack(side=tk.LEFT)
+            tk.Label(row, text=custom_algo, font=("Microsoft YaHei", 9),
+                     bg=THEME["card_bg"], fg="#2d3436").pack(side=tk.LEFT, padx=(4, 0))
+
+            # 删除按钮
+            def _delete_custom(idx=ci):
+                custom_algos.pop(idx)
+                algo_config[custom_key] = custom_algos
+                # 如果选中的索引被删除了，重置为0
+                current_selected = algo_config.get(selected_key, 0)
+                deleted_global_idx = custom_start_idx + idx
+                if current_selected == deleted_global_idx:
+                    algo_config[selected_key] = 0
+                elif current_selected > deleted_global_idx:
+                    algo_config[selected_key] = current_selected - 1
+                self._save_op_algo_config(algo_config)
+                canvas.unbind_all("<MouseWheel>")
+                dialog.destroy()
+                self._show_algo_dialog(parent_win, case_name, op_type, algo_db, algo_config, refresh_callback)
+
+            tk.Button(row, text="✕", font=("Microsoft YaHei", 8), bg=THEME["card_bg"],
+                      fg="#e74c3c", bd=0, activebackground=THEME["card_bg"],
+                      activeforeground="#c0392b", command=_delete_custom).pack(side=tk.RIGHT, padx=(4, 0))
+
+        # 输入新自定义公式
+        input_row = tk.Frame(custom_frame, bg=THEME["card_bg"])
+        input_row.pack(fill=tk.X, pady=(4, 0))
+        tk.Label(input_row, text="新增:", font=("Microsoft YaHei", 9),
+                 bg=THEME["card_bg"], fg="#888888").pack(side=tk.LEFT)
+        custom_entry = tk.Entry(input_row, font=("Microsoft YaHei", 9), width=30)
+        custom_entry.pack(side=tk.LEFT, padx=(4, 4))
+
+        # 校验提示标签
+        validate_label = tk.Label(input_row, text="", font=("Microsoft YaHei", 8),
+                                   bg=THEME["card_bg"], fg="#e74c3c")
+        validate_label.pack(side=tk.LEFT, padx=(4, 0))
+
+        def _validate_algo(algo_str):
+            """校验公式是否只包含合法字母"""
+            if not algo_str:
+                return False
+            # 允许的字符：R L U D F B x y z r l u d f b 及其变体（' 2）和括号、空格、M S E
+            return bool(re.match(r"^[RULFDBrludfbxyzMSE]'?(2)?(\s*[\(\)]?\s*[RULFDBrludfbxyzMSE]'?(2)?\s*[\(\)]?\s*)*$", algo_str))
+
+        def _add_custom():
+            new_algo = custom_entry.get().strip()
+            if not new_algo:
+                validate_label.config(text="请输入公式")
+                return
+            if not _validate_algo(new_algo):
+                validate_label.config(text="公式包含非法字符")
+                return
+            custom_algos.append(new_algo)
+            algo_config[custom_key] = custom_algos
+            self._save_op_algo_config(algo_config)
+            custom_entry.delete(0, tk.END)
+            canvas.unbind_all("<MouseWheel>")
+            dialog.destroy()
+            self._show_algo_dialog(parent_win, case_name, op_type, algo_db, algo_config, refresh_callback)
+
+        ttk.Button(input_row, text="保存", command=_add_custom,
+                   style="Accent.TButton").pack(side=tk.LEFT)
+
+        # 底部确认/取消按钮（放在最下面，不在滚动区域内）
+        btn_frame = tk.Frame(dialog, bg=THEME["bg"], padx=12, pady=8)
+        btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
+
+        def _confirm():
+            # 找到勾选的公式索引（只允许选一个）
+            chosen_idx = 0
+            for idx, var in check_vars.items():
+                if var.get():
+                    chosen_idx = idx
+                    break
+            for idx, var in custom_check_vars.items():
+                if var.get():
+                    chosen_idx = idx
+                    break
+            algo_config[selected_key] = chosen_idx
+            self._save_op_algo_config(algo_config)
+            canvas.unbind_all("<MouseWheel>")
+            dialog.destroy()
+            refresh_callback()
+
+        ttk.Button(btn_frame, text="确认", command=_confirm,
+                   style="Accent.TButton").pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(btn_frame, text="取消",
+                   command=lambda: (canvas.unbind_all("<MouseWheel>"), dialog.destroy()),
+                   style="Secondary.TButton").pack(side=tk.RIGHT)
+
+    def _compute_op_case_tags(self, data, algo_db, op_type):
+        """计算每个OP case的评价标签
+
+        Returns:
+            dict: {case_name: [tag1, tag2, ...]}
+        """
+        if not data:
+            return {}
+
+        # 计算全局 baseline
+        all_obs = []
+        all_tps = []
+        for case_data in data.values():
+            all_obs.append(case_data["avg_obs_time"])
+            all_tps.append(case_data["avg_tps"])
+
+        if len(all_obs) < 2:
+            return {cn: [] for cn in data}
+
+        import statistics
+        global_recog_mean = statistics.mean(all_obs)
+        global_recog_std = statistics.stdev(all_obs) if len(all_obs) > 1 else 1.0
+        global_tps_mean = statistics.mean(all_tps)
+        global_tps_std = statistics.stdev(all_tps) if len(all_tps) > 1 else 1.0
+
+        # 避免除零
+        if global_recog_std == 0:
+            global_recog_std = 1.0
+        if global_tps_std == 0:
+            global_tps_std = 1.0
+
+        result = {}
+        for case_name, case_data in data.items():
+            tags = []
+
+            # 跳过的case不添加标签
+            if case_name == "skip":
+                result[case_name] = []
+                continue
+
+            # 公式过长：平均步数比公式库中该case最长的公式多5步以上
+            algos = algo_db.get(case_name, [])
+            if algos:
+                # 计算每个公式的步数（简单统计非括号的大写字母移动数）
+                max_algo_steps = 0
+                for algo in algos:
+                    # 去掉括号，统计移动数
+                    clean = re.sub(r'[()]', '', algo)
+                    moves = len(re.findall(r"[RULFDBrzxy]'?2?", clean))
+                    if moves > max_algo_steps:
+                        max_algo_steps = moves
+                if case_data["avg_steps"] > max_algo_steps + 2:
+                    tags.append("公式过长")
+
+            # 识别慢：Z_recog >= 1.5
+            z_recog = (case_data["avg_obs_time"] - global_recog_mean) / global_recog_std
+            if z_recog >= 1.5:
+                tags.append("识别慢")
+
+            # 手速慢：Z_tps >= 1.5
+            z_tps = (global_tps_mean - case_data["avg_tps"]) / global_tps_std
+            if z_tps >= 1.5:
+                tags.append("手速慢")
+
+            result[case_name] = tags
+
+        return result
 
     def _do_multi_analysis(self):
         api_key = self.api_key_entry.get().strip()
