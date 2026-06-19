@@ -1,16 +1,22 @@
 """
-AI_CFOP - EXE打包脚本
-使用方法: python build_exe.py
+AI_CFOP - EXE打包 & 安装包构建脚本
+使用方法:
+- python build_exe.py — 仅打包 EXE（原有功能不变）
+- python build_exe.py --installer — 打包 EXE + 构建安装包
 """
 
 import os
 import sys
 import shutil
 import subprocess
+import argparse
+import re
 
 APP_NAME = "AI_CFOP"
 MAIN_SCRIPT = "cfop_analyzer_gui.py"
 ICON_FILE = "./cube_ai_icon.ico"
+ISS_FILE = "./installer.iss"
+INSTALLER_OUTPUT_DIR = "installer_output"
 
 EXCLUDE_MODULES = [
     "matplotlib", "numpy", "pandas", "scipy",
@@ -191,6 +197,13 @@ def build_exe():
             if os.path.isfile(src_avatar):
                 shutil.copy2(src_avatar, dst_avatar)
                 print(f"✓ 复制默认头像: default_avatar.png")
+
+            # 复制.cfop_op_algo.json（OLL/PLL公式选择配置）
+            src_algo = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cfop_op_algo.json")
+            dst_algo = os.path.join(dist_dir, ".cfop_op_algo.json")
+            if os.path.isfile(src_algo):
+                shutil.copy2(src_algo, dst_algo)
+                print(f"✓ 复制公式配置: .cfop_op_algo.json")
             
             total_size = 0
             for root, dirs, files in os.walk(dist_dir):
@@ -219,11 +232,156 @@ def build_exe():
     
     return True
 
+def get_version_from_iss():
+    """从 installer.iss 读取版本号"""
+    if not os.path.isfile(ISS_FILE):
+        return None
+    with open(ISS_FILE, "r", encoding="utf-8") as f:
+        content = f.read()
+    m = re.search(r'#define\s+MyAppVersion\s+"([^"]+)"', content)
+    return m.group(1) if m else None
+
+def find_inno_setup():
+    """查找 Inno Setup 编译器路径"""
+    # 1. 常见安装路径（C盘和F盘等）
+    candidates = [
+        r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        r"C:\Program Files\Inno Setup 6\ISCC.exe",
+        r"C:\Program Files (x86)\Inno Setup 5\ISCC.exe",
+        r"C:\Program Files\Inno Setup 5\ISCC.exe",
+        r"D:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        r"D:\Program Files\Inno Setup 6\ISCC.exe",
+        r"E:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        r"E:\Program Files\Inno Setup 6\ISCC.exe",
+        r"F:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        r"F:\Program Files\Inno Setup 6\ISCC.exe",
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+
+    # 2. 通过注册表查找卸载信息获取安装路径
+    try:
+        import winreg
+        for hive in [winreg.HKLM, winreg.HKCU]:
+            try:
+                key = winreg.OpenKey(hive, r"Software\Microsoft\Windows\CurrentVersion\Uninstall", 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
+                i = 0
+                while True:
+                    try:
+                        subkey_name = winreg.EnumKey(key, i)
+                        subkey = winreg.OpenKey(key, subkey_name)
+                        try:
+                            display_name, _ = winreg.QueryValueEx(subkey, "DisplayName")
+                            if "Inno Setup" in display_name:
+                                install_loc, _ = winreg.QueryValueEx(subkey, "InstallLocation")
+                                if install_loc:
+                                    iscc = os.path.join(install_loc, "ISCC.exe")
+                                    if os.path.isfile(iscc):
+                                        winreg.CloseKey(subkey)
+                                        winreg.CloseKey(key)
+                                        return iscc
+                        except FileNotFoundError:
+                            pass
+                        winreg.CloseKey(subkey)
+                        i += 1
+                    except OSError:
+                        break
+                winreg.CloseKey(key)
+            except OSError:
+                pass
+    except ImportError:
+        pass
+
+    # 3. 尝试 PATH 中查找
+    try:
+        result = subprocess.run(["ISCC", "/?"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return "ISCC"
+    except FileNotFoundError:
+        pass
+
+    return None
+
+def build_installer():
+    """使用 Inno Setup 构建安装包"""
+    print(f"\n{'='*50}")
+    print(f"开始构建安装包: {APP_NAME}")
+    print(f"{'='*50}\n")
+
+    # 检查 dist 目录是否存在
+    dist_dir = os.path.join("dist", APP_NAME)
+    if not os.path.isdir(dist_dir):
+        print("✗ 未找到打包输出目录 dist/AI_CFOP，请先运行打包")
+        return False
+
+    # 检查 ISS 文件
+    if not os.path.isfile(ISS_FILE):
+        print(f"✗ 未找到安装脚本: {ISS_FILE}")
+        return False
+
+    # 查找 Inno Setup
+    iscc_path = find_inno_setup()
+    if not iscc_path:
+        print("✗ 未找到 Inno Setup")
+        print("  请下载安装: https://jrsoftware.org/isdl.php")
+        return False
+    print(f"✓ Inno Setup: {iscc_path}")
+
+    # 创建输出目录
+    os.makedirs(INSTALLER_OUTPUT_DIR, exist_ok=True)
+
+    # 编译安装包
+    cmd = [iscc_path, ISS_FILE]
+    print(f"\n正在编译安装包...")
+    result = subprocess.run(cmd)
+
+    if result.returncode == 0:
+        version = get_version_from_iss() or "unknown"
+        installer_name = f"AI_CFOP_Setup_{version}.exe"
+        installer_path = os.path.join(INSTALLER_OUTPUT_DIR, installer_name)
+
+        if os.path.isfile(installer_path):
+            size_mb = os.path.getsize(installer_path) / (1024 * 1024)
+            print(f"\n{'='*50}")
+            print("✓ 安装包构建成功!")
+            print(f"{'='*50}")
+            print(f"  文件: {os.path.abspath(installer_path)}")
+            print(f"  大小: {size_mb:.2f} MB")
+            print(f"\n安装包功能:")
+            print("  - 首次安装: 选择目录，完整安装")
+            print("  - 覆盖安装: 自动检测已安装目录，仅更新程序文件")
+            print("  - 保留数据: 配置、数据库、日志、结果、头像不会被覆盖")
+        else:
+            # 尝试在输出目录中找到生成的文件
+            files = [f for f in os.listdir(INSTALLER_OUTPUT_DIR) if f.endswith('.exe')]
+            if files:
+                print(f"\n✓ 安装包构建成功!")
+                print(f"  文件: {os.path.abspath(os.path.join(INSTALLER_OUTPUT_DIR, files[0]))}")
+            else:
+                print(f"\n⚠ 编译成功但未找到安装包文件，请检查 {INSTALLER_OUTPUT_DIR}/ 目录")
+        return True
+    else:
+        print(f"\n✗ 安装包构建失败，错误码: {result.returncode}")
+        return False
+
 def main():
+    parser = argparse.ArgumentParser(description=f"{APP_NAME} - 打包工具")
+    parser.add_argument("--installer", action="store_true", help="打包EXE后构建安装包")
+    parser.add_argument("--installer-only", action="store_true", help="仅构建安装包（跳过EXE打包）")
+    args = parser.parse_args()
+
     print(f"\n{'='*50}")
     print(f"  {APP_NAME} - 打包工具")
     print(f"{'='*50}\n")
-    
+
+    if args.installer_only:
+        # 仅构建安装包
+        if build_installer():
+            print("\n安装包构建完成!")
+        return
+
+    # 打包 EXE
     if not check_pyinstaller():
         try:
             install_pyinstaller()
@@ -231,12 +389,19 @@ def main():
             print(f"✗ 安装 PyInstaller 失败: {e}")
             print("\n请手动安装: pip install pyinstaller")
             return
-    
+
     print("\n清理旧的构建文件...")
     clean_build()
-    
+
     if build_exe():
         print("\n打包完成!")
+
+        # 如果指定了 --installer，继续构建安装包
+        if args.installer:
+            if build_installer():
+                print("\n全部完成! (EXE打包 + 安装包构建)")
+            else:
+                print("\nEXE打包完成，但安装包构建失败")
 
 if __name__ == "__main__":
     main()

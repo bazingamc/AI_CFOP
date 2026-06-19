@@ -1818,16 +1818,21 @@ class CFOPAnalyzerGUI:
         """
         获取 WebView2 默认用户数据文件夹路径。
 
-        webview C 库内部使用 GetModuleFileName(NULL,...) 获取主程序路径，
-        然后构造 {exe_dir}/{exe_name}.WebView2 作为 UDF。
+        webview C 库实际使用 %APPDATA%\\{exe_name} 作为 UDF（非文档所述的
+        {exe_dir}/{exe_name}.WebView2）。经实测确认数据存储在：
+          - Python: %APPDATA%\\python.exe\\EBWebView
+          - exe:    %APPDATA%\\AI_CFOP.exe\\EBWebView
+
+        所有 exe 副本因可执行文件名相同，会共享同一个 UDF。
         """
+        appdata = os.environ.get("APPDATA", "")
+        if not appdata:
+            return None
         import ctypes
         buf = ctypes.create_unicode_buffer(260)
         ctypes.windll.kernel32.GetModuleFileNameW(None, buf, 260)
-        exe_path = buf.value
-        exe_dir = os.path.dirname(exe_path)
-        exe_name = os.path.splitext(os.path.basename(exe_path))[0]
-        return os.path.join(exe_dir, exe_name + ".WebView2")
+        exe_name = os.path.basename(buf.value)  # 含 .exe 后缀
+        return os.path.join(appdata, exe_name)
 
     @staticmethod
     def _is_junction(path):
@@ -1841,32 +1846,25 @@ class CFOPAnalyzerGUI:
 
     def _setup_cstimer_data_dir(self):
         """
-        将 WebView2 默认用户数据目录重定向到统一的数据目录。
+        将 WebView2 用户数据目录重定向到应用独立的数据目录。
 
-        webview C 库的 webview_create 不支持自定义 UDF 参数，
-        它根据主程序路径自动计算 UDF 为 {exe_dir}/{exe_name}.WebView2。
+        webview C 库使用 %APPDATA%\\{exe_name} 作为 UDF。
+        所有 exe 副本的可执行文件名都是 AI_CFOP.exe，导致共享同一个 UDF。
 
-        Python 运行时: python.WebView2
-        exe 运行时:    AI_CFOP.WebView2
-        不同运行方式的默认 UDF 不同，导致数据分散。
+        解决方案：在 %APPDATA%\\{exe_name} 创建 junction，重定向到
+        APP_DIR/data/cstimer_webview2（每个副本的 APP_DIR 不同，数据独立）。
 
-        解决方案：使用 Windows 目录联接 (junction) 将所有可能的默认 UDF
-        都重定向到同一个统一数据目录：
-          {项目根目录}/data/cstimer_webview2/
-
-        这样无论用 Python 还是 exe（任何副本）运行，csTimer 数据都在同一位置。
-        Junction 对应用透明，无需管理员权限。
+        Python 版本的 UDF 是 %APPDATA%\\python.exe，与 exe 不同，天然隔离。
         """
         default_udf = self._get_webview2_default_udf()
+        if not default_udf:
+            if log:
+                log.warning("csTimer UDF: 无法获取 APPDATA 环境变量")
+            return False
 
-        # 统一数据目录：始终使用项目根目录下的 data/cstimer_webview2
-        # Python 模式: gui.py 所在目录 = 项目根目录
-        # exe 模式: APP_DIR = exe 所在目录（由 config.py 定义）
-        # 两者都指向应用的实际运行目录
-        project_root = APP_DIR
-        target_udf = os.path.join(project_root, "data", "cstimer_webview2")
+        target_udf = os.path.join(APP_DIR, "data", "cstimer_webview2")
 
-        # 如果默认 UDF 已经是目标目录本身（不太可能，但做防御），无需操作
+        # 如果默认 UDF 已经是目标目录本身，无需操作
         if os.path.normcase(default_udf) == os.path.normcase(target_udf):
             return True
 
