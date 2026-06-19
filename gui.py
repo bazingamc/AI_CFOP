@@ -1589,10 +1589,10 @@ class CFOPAnalyzerGUI:
                               fg=THEME["accent"], bg=THEME["card_bg"])
         title_label.pack(pady=(0, 16))
         
-        guide_text = """本软件通过AI分析您的魔方CFOP还原过程，提供技术评估和训练建议。
+        guide_text = """本软件是集练习、复盘、统计、AI分析于一体的智能魔方训练工具，内嵌csTimer计时器，连接蓝牙智能魔方即可直接练习，还原数据一键同步。
 
 【须知】
-1.本软件需要配合智能魔方使用，不限品牌，可以连接cstimer（https://www.cstimer.net/）进行还原即可。
+1.本软件需要配合智能魔方使用，不限品牌，通过内嵌csTimer连接蓝牙魔方即可练习。
 2.目前支持三阶魔方、任意底色、CFOP方法还原。
 3.本软件免费使用，但需要用户自备token，token获取方式见下文。
 
@@ -1602,10 +1602,10 @@ class CFOPAnalyzerGUI:
 软件开发者不对因使用本软件导致的直接或间接损失负责。
 
 【快速开始】
-1. 在cstimer中打乱并还原您的魔方。
-2. 点击成绩列表中的还原时间，完整复制弹窗中的"打乱公式"和"回顾"中的内容到软件输入框。
-3. 配置API Key 并选择合适的模型。
-4. 点击"AI分析"开始分析。
+1. 切换到「csTimer」标签页，连接蓝牙智能魔方，打乱并还原。
+2. 切换到「数据管理」标签页，点击「同步csTimer数据」一键导入还原记录。
+3. 在「深度分析」标签页选择还原记录，配置API Key并选择模型。
+4. 点击「AI分析」开始分析。
 5. 分析结果可以保存到本地。
 
 【API Key获取】
@@ -1625,6 +1625,11 @@ class CFOPAnalyzerGUI:
 • 水平统计：展示PB、平均用时、TPS、各阶段详细统计（步数/用时/观察/卡顿/废步/TPS及标准差），以及优点和缺点TOP3标签
 • 智能训练：今日训练总结，包含统计文本、时间趋势折线图、时间分布直方图，支持AI总结和Ao12分析
 
+⏱️ csTimer
+• 内嵌csTimer计时器：软件内直接打开csTimer，连接蓝牙智能魔方即可练习
+• 一键同步数据：还原完成后点击「同步csTimer数据」，自动导入所有还原记录
+• Web Bluetooth支持：已启用蓝牙实验性功能，支持自动读取蓝牙魔方MAC地址
+
 🔬 深度分析
 • 单组/多组模式：单组分析单次还原，多组分析最多20组还原并计算平均和波动度
 • 底色自动识别：无需手动选择底色，软件自动检测
@@ -1637,6 +1642,7 @@ class CFOPAnalyzerGUI:
 • 日期筛选：按日期范围筛选记录，支持"本月"快捷按钮
 • 多选分析：支持Ctrl/Shift多选记录，点击"分析选中项"直接跳转深度分析
 • 还原详情：双击记录查看详情，含解法复盘时间轴和优缺点标签
+• 同步csTimer数据：从内嵌csTimer一键同步还原记录
 • 数据导入：支持csTimer导出文件和CSV文件导入，带进度弹窗
 • 数据导出：导出为CSV文件
 
@@ -1762,8 +1768,8 @@ class CFOPAnalyzerGUI:
                  bg=THEME["bg"], fg=THEME["accent"]).pack(pady=(80, 8))
         tk.Label(self._cstimer_placeholder,
                  text="切换到本标签页后将加载 WebView2 内嵌浏览器\n正在打开 https://www.cstimer.net/ ...\n\n"
-                      "已启用 Web Bluetooth 实验性功能（含 BLE 广播扫描），\n"
-                      "支持自动读取蓝牙魔方 MAC 地址。",
+                      "已启用 Web Bluetooth 实验性功能（含 BLE 广播扫描）\n"
+                      "支持连接蓝牙智能魔方，还原后可一键同步数据",
                  font=("Microsoft YaHei", 10),
                  bg=THEME["bg"], fg="#999999").pack()
 
@@ -3272,7 +3278,7 @@ class CFOPAnalyzerGUI:
                                                         font=("Microsoft YaHei", 10))
         self._settings_smart_paste_cb.pack(side=tk.LEFT)
         self._create_help_icon(smart_paste_frame, "smart_paste").pack(side=tk.LEFT, padx=(8, 0))
-        tk.Label(smart_paste_frame, text="自动从剪贴板识别csTimer数据",
+        tk.Label(smart_paste_frame, text="自动从剪贴板识别csTimer数据（也可通过内嵌csTimer一键同步）",
                  bg=THEME["card_bg"], fg="#888",
                  font=("Microsoft YaHei", 9)).pack(side=tk.LEFT, padx=(16, 0))
 
@@ -3312,10 +3318,10 @@ class CFOPAnalyzerGUI:
     def _build_help_tab(self):
         tab = self._tab_help
 
-        guide_text = """本软件通过AI分析您的魔方CFOP还原过程，提供技术评估和训练建议。
+        guide_text = """本软件是集练习、复盘、统计、AI分析于一体的智能魔方训练工具，内嵌csTimer计时器，连接蓝牙智能魔方即可直接练习，还原数据一键同步。
 
 【须知】
-1.本软件需要配合智能魔方使用，不限品牌，可以连接cstimer（https://www.cstimer.net/）进行还原即可。
+1.本软件需要配合智能魔方使用，不限品牌，通过内嵌csTimer连接蓝牙魔方即可练习。
 2.目前支持三阶魔方、任意底色、CFOP方法还原。
 3.本软件免费使用，但需要用户自备token，token获取方式见下文。
 
@@ -3325,10 +3331,10 @@ class CFOPAnalyzerGUI:
 软件开发者不对因使用本软件导致的直接或间接损失负责。
 
 【快速开始】
-1. 在cstimer中打乱并还原您的魔方。
-2. 点击成绩列表中的还原时间，完整复制弹窗中的"打乱公式"和"回顾"中的内容到软件输入框。
-3. 配置API Key 并选择合适的模型。
-4. 点击"AI分析"开始分析。
+1. 切换到「csTimer」标签页，连接蓝牙智能魔方，打乱并还原。
+2. 切换到「数据管理」标签页，点击「同步csTimer数据」一键导入还原记录。
+3. 在「深度分析」标签页选择还原记录，配置API Key并选择模型。
+4. 点击「AI分析」开始分析。
 5. 分析结果可以保存到本地。
 
 【API Key获取】
@@ -3348,6 +3354,11 @@ class CFOPAnalyzerGUI:
 • 水平统计：展示PB、平均用时、TPS、各阶段详细统计（步数/用时/观察/卡顿/废步/TPS及标准差），以及优点和缺点TOP3标签
 • 智能训练：今日训练总结，包含统计文本、时间趋势折线图、时间分布直方图，支持AI总结和Ao12分析
 
+⏱️ csTimer
+• 内嵌csTimer计时器：软件内直接打开csTimer，连接蓝牙智能魔方即可练习
+• 一键同步数据：还原完成后点击「同步csTimer数据」，自动导入所有还原记录
+• Web Bluetooth支持：已启用蓝牙实验性功能，支持自动读取蓝牙魔方MAC地址
+
 🔬 深度分析
 • 单组/多组模式：单组分析单次还原，多组分析最多20组还原并计算平均和波动度
 • 底色自动识别：无需手动选择底色，软件自动检测
@@ -3360,6 +3371,7 @@ class CFOPAnalyzerGUI:
 • 日期筛选：按日期范围筛选记录，支持"本月"快捷按钮
 • 多选分析：支持Ctrl/Shift多选记录，点击"分析选中项"直接跳转深度分析
 • 还原详情：双击记录查看详情，含解法复盘时间轴和优缺点标签
+• 同步csTimer数据：从内嵌csTimer一键同步还原记录
 • 数据导入：支持csTimer导出文件和CSV文件导入，带进度弹窗
 • 数据导出：导出为CSV文件
 
