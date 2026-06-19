@@ -68,7 +68,7 @@ class CFOPAnalyzerGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("AI_CFOP V1.3")
+        self.root.title("AI_CFOP V1.4")
         self.root.geometry("960x980")
         self.root.resizable(True, True)
         self.root.configure(bg=THEME["bg"])
@@ -1512,6 +1512,7 @@ class CFOPAnalyzerGUI:
 
         self._tab_home = ttk.Frame(self._notebook)
         self._tab_training = ttk.Frame(self._notebook)
+        self._tab_cstimer = ttk.Frame(self._notebook)
         self._tab_analysis = ttk.Frame(self._notebook)
         self._tab_data = ttk.Frame(self._notebook)
         self._tab_settings = ttk.Frame(self._notebook)
@@ -1519,6 +1520,7 @@ class CFOPAnalyzerGUI:
 
         self._notebook.add(self._tab_home, text="  🏠 首页  ")
         self._notebook.add(self._tab_training, text="  🎯 智能训练  ")
+        self._notebook.add(self._tab_cstimer, text="  ⏱️ csTimer  ")
         self._notebook.add(self._tab_analysis, text="  🔬 深度分析  ")
         self._notebook.add(self._tab_data, text="  📂 数据管理  ")
         self._notebook.add(self._tab_settings, text="  ⚙️ 设置  ")
@@ -1526,6 +1528,7 @@ class CFOPAnalyzerGUI:
 
         self._build_home_tab()
         self._build_training_tab()
+        self._build_cstimer_tab()
         self._build_analysis_tab()
         self._build_data_tab()
         self._build_settings_tab()
@@ -1533,6 +1536,192 @@ class CFOPAnalyzerGUI:
 
     def _show_user_manage_from_topbar(self):
         self._show_user_select_dialog()
+
+    def _build_cstimer_tab(self):
+        """csTimer标签页：使用 WebView2 内嵌浏览器访问 https://www.cstimer.net/"""
+        tab = self._tab_cstimer
+        self._cstimer_webview = None
+        self._cstimer_initialized = False
+
+        # 占位界面，首次切换到本标签页时再初始化 WebView2
+        self._cstimer_placeholder = tk.Frame(tab, bg=THEME["bg"])
+        self._cstimer_placeholder.pack(fill=tk.BOTH, expand=True)
+        tk.Label(self._cstimer_placeholder, text="⏱️ csTimer",
+                 font=("Microsoft YaHei", 16, "bold"),
+                 bg=THEME["bg"], fg=THEME["accent"]).pack(pady=(80, 8))
+        tk.Label(self._cstimer_placeholder,
+                 text="切换到本标签页后将加载 WebView2 内嵌浏览器\n正在打开 https://www.cstimer.net/ ...\n\n"
+                      "已启用 Web Bluetooth 实验性功能（含 BLE 广播扫描），\n"
+                      "支持自动读取蓝牙魔方 MAC 地址。",
+                 font=("Microsoft YaHei", 10),
+                 bg=THEME["bg"], fg="#999999").pack()
+
+        self._notebook.bind("<<NotebookTabChanged>>",
+                            self._on_notebook_tab_changed, add="+")
+
+    def _on_notebook_tab_changed(self, event=None):
+        if self._cstimer_initialized:
+            return
+        try:
+            if self._notebook.index("current") == self._notebook.index(self._tab_cstimer):
+                self._init_cstimer_webview()
+        except Exception as e:
+            if log:
+                log.debug(f"csTimer 标签页初始化检测：{e}")
+
+    def _configure_webview2_for_bluetooth(self):
+        """
+        为 WebView2 配置 Web Bluetooth（含 BLE 广播扫描）所需的浏览器参数。
+
+        对应用户给出的两项浏览器配置：
+          - Chrome: chrome://flags/#enable-experimental-web-platform-features
+            → 命令行开关 --enable-experimental-web-platform-features
+          - Bluefy: Enable BLE Advertisements
+            → Chromium 特性 WebBluetoothWatchingAdvertisements（watchAdvertisements/getDevices）
+
+        通过 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 环境变量注入。
+        该变量在 WebView2 运行时首次创建浏览器进程时读取一次，
+        因此必须在实例化 TkWebview 之前设置（本标签页采用懒加载，时机正确）。
+        若环境已存在该变量，则合并去重，避免覆盖用户自定义配置。
+        """
+        needed_flags = [
+            "--enable-experimental-web-platform-features",
+            "--enable-features=WebBluetooth,WebBluetoothWatchingAdvertisements,WebBluetoothGetDevices",
+        ]
+        existing = os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "")
+        tokens = [t for t in existing.split() if t]
+        merged = list(tokens)
+        for flag in needed_flags:
+            if flag not in merged:
+                merged.append(flag)
+        os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = " ".join(merged)
+        if log:
+            log.debug("csTimer WebView2 启用 Web Bluetooth 参数: "
+                      + os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"])
+
+    @staticmethod
+    def _get_webview2_default_udf():
+        """
+        获取 WebView2 默认用户数据文件夹路径。
+
+        webview C 库内部使用 GetModuleFileName(NULL,...) 获取主程序路径，
+        然后构造 {exe_dir}/{exe_name}.WebView2 作为 UDF。
+        """
+        import ctypes
+        buf = ctypes.create_unicode_buffer(260)
+        ctypes.windll.kernel32.GetModuleFileNameW(None, buf, 260)
+        exe_path = buf.value
+        exe_dir = os.path.dirname(exe_path)
+        exe_name = os.path.splitext(os.path.basename(exe_path))[0]
+        return os.path.join(exe_dir, exe_name + ".WebView2")
+
+    @staticmethod
+    def _is_junction(path):
+        """判断路径是否为目录联接 (junction / reparse point)"""
+        import ctypes
+        if not os.path.isdir(path):
+            return False
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(path)
+        # FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
+        return bool(attrs & 0x0400)
+
+    def _setup_cstimer_data_dir(self):
+        """
+        将 WebView2 默认用户数据目录重定向到 APP_DIR/data/cstimer_webview2/。
+
+        webview C 库的 webview_create 不支持自定义 UDF 参数，
+        它根据主程序路径自动计算 UDF 为 {exe_dir}/{exe_name}.WebView2。
+        因此采用 Windows 目录联接 (junction) 方式：
+          默认UDF路径 ──junction──→ APP_DIR/data/cstimer_webview2/
+
+        Junction 对应用透明，无需管理员权限。
+        """
+        default_udf = self._get_webview2_default_udf()
+        target_udf = os.path.join(APP_DIR, "data", "cstimer_webview2")
+
+        # 已经是联接且指向正确目标，无需操作
+        if os.path.isdir(default_udf) and self._is_junction(default_udf):
+            try:
+                real_target = os.path.realpath(default_udf)
+                if os.path.normcase(real_target) == os.path.normcase(os.path.realpath(target_udf)):
+                    if log:
+                        log.debug(f"csTimer UDF 联接已存在: {default_udf} → {target_udf}")
+                    return True
+            except Exception:
+                pass
+
+        # 确保目标目录存在
+        os.makedirs(target_udf, exist_ok=True)
+
+        # 如果默认路径已存在且是真实目录（非联接），迁移数据到目标
+        if os.path.isdir(default_udf) and not self._is_junction(default_udf):
+            try:
+                import shutil
+                for item in os.listdir(default_udf):
+                    src = os.path.join(default_udf, item)
+                    dst = os.path.join(target_udf, item)
+                    if not os.path.exists(dst):
+                        if os.path.isdir(src):
+                            shutil.copytree(src, dst)
+                        else:
+                            shutil.copy2(src, dst)
+                shutil.rmtree(default_udf)
+                if log:
+                    log.debug(f"csTimer UDF 数据已迁移: {default_udf} → {target_udf}")
+            except Exception as e:
+                if log:
+                    log.warning(f"csTimer UDF 数据迁移失败: {e}")
+                # 迁移失败时保留原目录，不创建联接
+                return False
+
+        # 创建联接: 默认路径 → 目标路径
+        if not os.path.exists(default_udf):
+            default_parent = os.path.dirname(default_udf)
+            os.makedirs(default_parent, exist_ok=True)
+            try:
+                import subprocess
+                result = subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", default_udf, target_udf],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    if log:
+                        log.debug(f"csTimer UDF 联接已创建: {default_udf} → {target_udf}")
+                    return True
+                else:
+                    if log:
+                        log.warning(f"csTimer UDF 联接创建失败: {result.stderr.strip()}")
+                    return False
+            except Exception as e:
+                if log:
+                    log.warning(f"csTimer UDF 联接创建异常: {e}")
+                return False
+
+        return True
+
+    def _init_cstimer_webview(self):
+        """首次进入 csTimer 标签页时，创建 WebView2 控件并加载页面"""
+        self._cstimer_initialized = True
+
+        # 将 WebView2 用户数据目录重定向到 APP_DIR/data/cstimer_webview2/
+        self._setup_cstimer_data_dir()
+
+        # 在创建 WebView2 之前注入 Web Bluetooth 所需的浏览器参数
+        self._configure_webview2_for_bluetooth()
+
+        try:
+            from tkwebview import TkWebview
+        except Exception as e:
+            tk.Label(self._tab_cstimer,
+                     text=f"无法加载 WebView2 内嵌浏览器\n\n请运行：pip install tkwebview\n\n错误信息：{e}",
+                     font=("Microsoft YaHei", 10),
+                     bg=THEME["bg"], fg="#cc4444").pack(fill=tk.BOTH, expand=True)
+            return
+
+        self._cstimer_placeholder.pack_forget()
+        self._cstimer_webview = TkWebview(self._tab_cstimer)
+        self._cstimer_webview.pack(fill=tk.BOTH, expand=True)
+        self._cstimer_webview.navigate("https://www.cstimer.net/")
 
     def _build_home_tab(self):
         tab = self._tab_home

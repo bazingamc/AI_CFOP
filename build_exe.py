@@ -45,6 +45,8 @@ HIDDEN_IMPORTS = [
     "tkinter.messagebox",
     "tkinter.filedialog",
     "tkinter.font",
+    "tkwebview",
+    "tkwebview.core",
 ]
 
 def check_pyinstaller():
@@ -124,6 +126,17 @@ def build_exe():
     
     for mod in EXCLUDE_MODULES:
         cmd.extend(["--exclude-module", mod])
+    
+    # 打包 tkwebview 的 webview.dll（WebView2 嵌入浏览器所需）
+    try:
+        import tkwebview as _tw
+        _tw_dir = os.path.dirname(_tw.__file__)
+        _dll_src = os.path.join(_tw_dir, "platform", "win32", "x64", "webview.dll")
+        if os.path.isfile(_dll_src):
+            cmd.extend(["--add-binary", f"{_dll_src}{os.pathsep}tkwebview/platform/win32/x64"])
+            print(f"  - 包含 webview.dll (tkwebview 嵌入浏览器)")
+    except ImportError:
+        print("  ⚠ tkwebview 未安装，csTimer 标签页将不可用")
     
     cmd.append(MAIN_SCRIPT)
     

@@ -4,9 +4,9 @@
 a = Analysis(
     ['cfop_analyzer_gui.py'],
     pathex=[],
-    binaries=[],
+    binaries=[('C:\\Users\\Administrator\\AppData\\Local\\Programs\\Python\\Python310\\lib\\site-packages\\tkwebview\\platform\\win32\\x64\\webview.dll', 'tkwebview/platform/win32/x64')],
     datas=[],
-    hiddenimports=['openai', 'httpx', 'http', 'h11', 'anyio', 'sniffio', 'certifi', 'idna', 'h2', 'hpack', 'hyperframe', 'hpack.struct', 'hpack.hpack', 'tkinter', 'tkinter.ttk', 'tkinter.scrolledtext', 'tkinter.messagebox', 'tkinter.filedialog', 'tkinter.font'],
+    hiddenimports=['openai', 'httpx', 'http', 'h11', 'anyio', 'sniffio', 'certifi', 'idna', 'h2', 'hpack', 'hyperframe', 'hpack.struct', 'hpack.hpack', 'tkinter', 'tkinter.ttk', 'tkinter.scrolledtext', 'tkinter.messagebox', 'tkinter.filedialog', 'tkinter.font', 'tkwebview', 'tkwebview.core'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
