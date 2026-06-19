@@ -68,7 +68,7 @@ class CFOPAnalyzerGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("AI_CFOP V1.2")
+        self.root.title("AI_CFOP V1.3")
         self.root.geometry("960x980")
         self.root.resizable(True, True)
         self.root.configure(bg=THEME["bg"])
@@ -1641,8 +1641,8 @@ class CFOPAnalyzerGUI:
             avg_sub_parts.append(f"σ {total_std:.2f}s")
         if total_avg_7d and total_avg:
             diff = total_avg_7d - total_avg
-            arrow = "↑" if diff > 0 else "↓"
-            color_hint = "退步" if diff > 0 else "进步"
+            arrow = "↑" if diff < 0 else "↓"
+            color_hint = "进步" if diff < 0 else "退步"
             avg_sub_parts.append(f"近7天 {total_avg_7d:.2f}s {arrow}{color_hint}")
         avg_sub = "  |  ".join(avg_sub_parts)
         self._make_stat_card(cards_row, "⏱ 平均用时", avg_val, avg_sub, width=220)
@@ -1710,9 +1710,9 @@ class CFOPAnalyzerGUI:
         ]
         trend_data = []
         for label, days in trend_periods:
-            t_avg = memory_db.get_total_time_avg(days=days, analyzed_only=False, limit=None)
-            s_avg = memory_db.get_total_steps_avg(days=days, analyzed_only=False, limit=None)
-            tps_avg = memory_db.get_total_tps_avg(days=days, analyzed_only=False, limit=None)
+            t_avg = memory_db.get_total_time_avg(days=days, limit=None)
+            s_avg = memory_db.get_total_steps_avg(days=days, limit=None)
+            tps_avg = memory_db.get_total_tps_avg(days=days, limit=None)
             cnt = memory_db.get_record_count_by_period(days=days)
             if t_avg is not None:
                 trend_data.append((label, t_avg, s_avg, tps_avg, cnt))
@@ -1744,7 +1744,6 @@ class CFOPAnalyzerGUI:
             sep_frame = tk.Frame(trend_card, bg=THEME["border"], height=1)
             sep_frame.grid(row=1, column=0, columnspan=len(headers), sticky="ew", pady=2)
 
-            prev_time = None
             for row_idx, (period_label, t_avg, s_avg, tps_avg, cnt) in enumerate(trend_data, start=2):
                 tk.Label(trend_card, text=period_label, font=("Microsoft YaHei", 9),
                          bg=THEME["card_bg"], fg=THEME["fg"], anchor="w"
@@ -1758,12 +1757,14 @@ class CFOPAnalyzerGUI:
                          bg=THEME["card_bg"], fg=THEME["fg"], anchor="e"
                          ).grid(row=row_idx, column=2, padx=(4, 6), pady=1, sticky="e")
 
-                # 变化趋势
-                if prev_time is not None:
-                    diff = t_avg - prev_time
+                # 变化趋势：当前行与下一行（更长时段）比较
+                next_idx = row_idx - 2 + 1  # trend_data中的下一个索引
+                if next_idx < len(trend_data):
+                    next_time = trend_data[next_idx][1]
+                    diff = t_avg - next_time
                     if abs(diff) > 0.01:
-                        arrow = "↑" if diff > 0 else "↓"
-                        arrow_fg = "#e74c3c" if diff > 0 else "#27ae60"
+                        arrow = "↑" if diff < 0 else "↓"
+                        arrow_fg = "#e74c3c" if diff < 0 else "#27ae60"
                         diff_str = f"{arrow} {abs(diff):.2f}s"
                         tk.Label(trend_card, text=diff_str, font=("Microsoft YaHei", 9),
                                  bg=THEME["card_bg"], fg=arrow_fg, anchor="e"
@@ -1786,8 +1787,6 @@ class CFOPAnalyzerGUI:
                 tk.Label(trend_card, text=tps_str, font=("Microsoft YaHei", 9),
                          bg=THEME["card_bg"], fg=THEME["fg"], anchor="w"
                          ).grid(row=row_idx, column=5, padx=(4, 6), pady=1, sticky="w")
-
-                prev_time = t_avg
 
         # ═══ 第四行：优缺点标签 ═══
         tag_stats = memory_db.get_tag_stats()
@@ -1862,7 +1861,7 @@ class CFOPAnalyzerGUI:
         # === OLL训练部分 ===
         oll_header = ttk.Frame(parent)
         oll_header.pack(fill=tk.X, pady=(8, 2), padx=8)
-        ttk.Label(oll_header, text="  OLL训练", font=("Microsoft YaHei", 10, "bold"),
+        ttk.Label(oll_header, text="  OLL训练", font=("Microsoft YaHei", 12, "bold"),
                   foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
         ttk.Button(oll_header, text="📈 OLL统计", command=self._show_oll_stats,
                    style="Accent.TButton").pack(side=tk.RIGHT, padx=(4, 0))
@@ -1874,7 +1873,7 @@ class CFOPAnalyzerGUI:
         # === PLL训练部分 ===
         pll_header = ttk.Frame(parent)
         pll_header.pack(fill=tk.X, pady=(8, 2), padx=8)
-        ttk.Label(pll_header, text="  PLL训练", font=("Microsoft YaHei", 10, "bold"),
+        ttk.Label(pll_header, text="  PLL训练", font=("Microsoft YaHei", 12, "bold"),
                   foreground=THEME["accent"], background=THEME["bg"]).pack(side=tk.LEFT)
         ttk.Button(pll_header, text="📈 PLL统计", command=self._show_pll_stats,
                    style="Accent.TButton").pack(side=tk.RIGHT, padx=(4, 0))
@@ -4460,7 +4459,7 @@ class CFOPAnalyzerGUI:
 
         if not tagged_cases:
             tk.Label(frame, text="暂无需要重点训练的case", bg=THEME["card_bg"],
-                     fg="#888888", font=("Microsoft YaHei", 9)).pack(anchor="w")
+                     fg="#888888", font=("Microsoft YaHei", 11)).pack(anchor="w")
             return
 
         # 排序：标签数多的靠前，标签相同则出现次数多的靠前
@@ -4557,7 +4556,7 @@ class CFOPAnalyzerGUI:
 
             if not img_loaded:
                 tk.Label(top_row, text=f"OLL\n{case_name}" if op_type == "oll" else f"PLL\n{case_name}",
-                         font=("Microsoft YaHei", 8, "bold"), bg=card_bg,
+                         font=("Microsoft YaHei", 10, "bold"), bg=card_bg,
                          fg=THEME["accent"], width=5).pack(side=tk.LEFT, padx=(0, 4))
 
             # 名称和标签
@@ -4565,13 +4564,13 @@ class CFOPAnalyzerGUI:
             name_tag_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
             case_title = f"OLL-{case_name}" if op_type == "oll" else f"PLL-{case_name}"
-            tk.Label(name_tag_frame, text=case_title, font=("Microsoft YaHei", 9, "bold"),
+            tk.Label(name_tag_frame, text=case_title, font=("Microsoft YaHei", 11, "bold"),
                      bg=card_bg, fg="#2d3436").pack(anchor="w")
 
             tag_row = tk.Frame(name_tag_frame, bg=card_bg)
             tag_row.pack(anchor="w")
             for tag in case_tags:
-                tk.Label(tag_row, text=tag, font=("Microsoft YaHei", 7, "bold"),
+                tk.Label(tag_row, text=tag, font=("Microsoft YaHei", 9, "bold"),
                          bg="#ffcccc", fg="#c0392b", padx=2, pady=0).pack(side=tk.LEFT, padx=(0, 2))
 
             # 下半部分：推荐公式
@@ -4580,9 +4579,9 @@ class CFOPAnalyzerGUI:
             if algo_clean:
                 algo_row = tk.Frame(card, bg=card_bg)
                 algo_row.pack(fill=tk.X, pady=(2, 0))
-                tk.Label(algo_row, text="推荐:", font=("Microsoft YaHei", 7),
+                tk.Label(algo_row, text="推荐:", font=("Microsoft YaHei", 9),
                          bg=card_bg, fg="#888888").pack(side=tk.LEFT)
-                tk.Label(algo_row, text=algo_clean, font=("Consolas", 8),
+                tk.Label(algo_row, text=algo_clean, font=("Consolas", 10),
                          bg=card_bg, fg="#6c5ce7").pack(side=tk.LEFT, padx=(2, 0))
 
         # 保存图片引用到frame防止GC
