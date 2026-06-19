@@ -9,6 +9,7 @@ import threading
 import json
 import re
 import os
+import time
 from datetime import datetime
 
 from config import (
@@ -1218,6 +1219,216 @@ class CFOPAnalyzerGUI:
         else:
             self._clear_memory()
 
+    def _sync_cstimer_data(self):
+        """
+        同步csTimer数据：从内置csTimer浏览器导出数据，自动导入到软件，完成后删除临时文件。
+
+        使用本地 HTTP 服务器接收 JS 数据，避免 webview.bind() 的 GIL 冲突问题。
+        webview.bind() 的回调从 WebView2 内部 C 线程调用，直接操作 tkinter 会导致
+        PyEval_RestoreThread 崩溃。改用 HTTP 服务器 + 主线程轮询队列的方式，
+        确保所有 tkinter 操作都在主线程执行。
+        """
+        if not self._cstimer_webview:
+            messagebox.showwarning(
+                "csTimer 未加载",
+                "请先切换到 csTimer 标签页，等待页面加载完成后再同步数据。"
+            )
+            return
+
+        import http.server as _http_server
+        import queue as _queue_mod
+
+        data_queue = _queue_mod.Queue()
+
+        # 临时 HTTP 服务器，用于接收 JS 通过 fetch() 发送的 csTimer 导出数据
+        class _CstimerSyncHandler(_http_server.BaseHTTPRequestHandler):
+            def do_OPTIONS(self):
+                self.send_response(200)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+                self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                self.end_headers()
+
+            def do_POST(self):
+                content_length = int(self.headers.get('Content-Length', 0))
+                raw = self.rfile.read(content_length).decode('utf-8')
+                data_queue.put(raw)
+                self.send_response(200)
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(b'OK')
+
+            def log_message(self, format, *args):
+                pass  # 静默日志，避免控制台输出
+
+        try:
+            server = _http_server.HTTPServer(('127.0.0.1', 0), _CstimerSyncHandler)
+        except Exception as e:
+            messagebox.showerror("同步失败", f"无法启动本地数据接收服务:\n{e}")
+            return
+
+        port = server.server_address[1]
+        # 只处理一个请求后自动退出
+        server_thread = threading.Thread(target=server.handle_request, daemon=True)
+        server_thread.start()
+
+        # 显示进度窗口
+        progress_win = tk.Toplevel(self.root)
+        progress_win.title("同步csTimer数据")
+        progress_win.geometry("350x120")
+        progress_win.resizable(False, False)
+        progress_win.transient(self.root)
+        progress_win.grab_set()
+        self._center_window(progress_win)
+
+        tk.Label(progress_win, text="正在从csTimer导出数据...", font=("Microsoft YaHei", 10)).pack(pady=(15, 5))
+        status_label = tk.Label(progress_win, text="请稍候...", font=("Microsoft YaHei", 9), fg="#666")
+        status_label.pack(pady=5)
+
+        # 临时文件路径
+        tmp_dir = os.path.join(APP_DIR, "data", "tmp")
+        os.makedirs(tmp_dir, exist_ok=True)
+        tmp_path = os.path.join(tmp_dir, f"cstimer_sync_{int(time.time())}.json")
+
+        # 主线程轮询：从队列中读取 JS 发送的数据
+        poll_start = time.time()
+
+        def poll_data():
+            try:
+                data = data_queue.get_nowait()
+            except _queue_mod.Empty:
+                if time.time() - poll_start > 30:
+                    # 超时
+                    try:
+                        progress_win.destroy()
+                    except Exception:
+                        pass
+                    server.server_close()
+                    messagebox.showwarning("同步超时",
+                        "从csTimer导出数据超时，请确保csTimer页面已加载完成。")
+                    return
+                self.root.after(200, poll_data)
+                return
+
+            # 收到数据，关闭服务器
+            server.server_close()
+
+            if not data or not data.strip():
+                try:
+                    progress_win.destroy()
+                except Exception:
+                    pass
+                messagebox.showerror("同步失败", "从csTimer接收到的数据为空。")
+                return
+
+            try:
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(data)
+                if log:
+                    log.debug(f"csTimer 数据已导出到临时文件: {tmp_path} ({len(data)} bytes)")
+                status_label.config(text="数据导出完成，正在导入...")
+                progress_win.update()
+                self._import_cstimer_from_path(tmp_path, progress_win, cleanup_path=tmp_path)
+            except Exception as e:
+                if log:
+                    log.error(f"csTimer 数据导出处理失败: {e}")
+                try:
+                    progress_win.destroy()
+                except Exception:
+                    pass
+                messagebox.showerror("同步失败", f"处理csTimer数据时出错:\n{e}")
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+        # 开始轮询（在主线程中）
+        self.root.after(200, poll_data)
+
+        # 通过 eval 调用 JS：调用 csTimer 的 storage.exportAll()，将结果 POST 到本地 HTTP 服务器
+        js_code = (
+            "(function(){"
+            "try{"
+            "if(typeof storage==='undefined'||typeof storage.exportAll!=='function'){"
+            "return;"
+            "}"
+            "storage.exportAll().then(function(exportObj){"
+            "try{"
+            "exportObj['properties']=typeof mathlib!=='undefined'&&typeof mathlib.str2obj==='function'"
+            "?mathlib.str2obj(localStorage['properties']):{};"
+            "var jsonStr=JSON.stringify(exportObj);"
+            "fetch('http://127.0.0.1:" + str(port) + "/sync',{"
+            "method:'POST',body:jsonStr"
+            "}).catch(function(e){console.error('sync fetch error:',e);});"
+            "}catch(e){console.error('sync serialize error:',e);}"
+            "}).catch(function(e){console.error('sync exportAll error:',e);});"
+            "}catch(e){console.error('sync error:',e);}"
+            "})();"
+        )
+        self._cstimer_webview.webview.eval(js_code)
+
+    def _import_cstimer_from_path(self, path, progress_win=None, cleanup_path=None):
+        """
+        从指定路径导入csTimer数据（不弹出文件选择对话框）。
+
+        Args:
+            path: csTimer 导出文件路径
+            progress_win: 已有的进度窗口（若为 None 则新建）
+            cleanup_path: 导入完成后需要删除的临时文件路径
+        """
+        if not os.path.isfile(path):
+            messagebox.showerror("导入失败", f"文件不存在:\n{path}")
+            return
+
+        if progress_win is None:
+            progress_win = tk.Toplevel(self.root)
+            progress_win.title("导入csTimer数据")
+            progress_win.geometry("350x120")
+            progress_win.resizable(False, False)
+            progress_win.transient(self.root)
+            progress_win.grab_set()
+            self._center_window(progress_win)
+            tk.Label(progress_win, text="正在导入，请稍候...", font=("Microsoft YaHei", 10)).pack(pady=(15, 5))
+            tk.Label(progress_win, text="准备中...", font=("Microsoft YaHei", 9), fg="#666").pack(pady=5)
+
+        progress_label = tk.Label(progress_win, text="准备中...", font=("Microsoft YaHei", 9), fg="#666")
+        progress_label.pack(pady=5)
+
+        def on_progress(current, total):
+            progress_label.config(text=f"处理中: {current}/{total}")
+            progress_win.update()
+
+        def do_import():
+            try:
+                result = memory_db.import_cstimer(path, progress_cb=on_progress)
+                self.root.after(0, lambda: self._on_import_done_with_cleanup(
+                    progress_win, result, cleanup_path))
+            except Exception as e:
+                self.root.after(0, lambda: self._on_import_done_with_cleanup(
+                    progress_win,
+                    {"total": 0, "imported": 0, "skipped_no_review": 0, "skipped_parse_error": 0, "error": str(e)},
+                    cleanup_path
+                ))
+
+        import threading
+        t = threading.Thread(target=do_import, daemon=True)
+        t.start()
+
+    def _on_import_done_with_cleanup(self, progress_win, result, cleanup_path=None):
+        """导入完成回调，支持清理临时文件"""
+        # 清理临时文件
+        if cleanup_path:
+            try:
+                os.remove(cleanup_path)
+                if log:
+                    log.debug(f"已删除临时csTimer数据文件: {cleanup_path}")
+            except Exception as e:
+                if log:
+                    log.warning(f"删除临时文件失败: {cleanup_path} - {e}")
+
+        # 复用已有的 _on_import_done 逻辑
+        self._on_import_done(progress_win, result)
+
     def _import_cstimer(self):
         path = filedialog.askopenfilename(
             title="选择csTimer导出文件",
@@ -1587,6 +1798,9 @@ class CFOPAnalyzerGUI:
         needed_flags = [
             "--enable-experimental-web-platform-features",
             "--enable-features=WebBluetooth,WebBluetoothWatchingAdvertisements,WebBluetoothGetDevices",
+            # 禁用 Web 安全策略：允许 HTTPS 页面 (cstimer.net) 向本地 HTTP 服务器发送数据（同步功能所需）
+            # 同时解决 CORS 和混合内容限制
+            "--disable-web-security",
         ]
         existing = os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "")
         tokens = [t for t in existing.split() if t]
@@ -1627,17 +1841,34 @@ class CFOPAnalyzerGUI:
 
     def _setup_cstimer_data_dir(self):
         """
-        将 WebView2 默认用户数据目录重定向到 APP_DIR/data/cstimer_webview2/。
+        将 WebView2 默认用户数据目录重定向到统一的数据目录。
 
         webview C 库的 webview_create 不支持自定义 UDF 参数，
         它根据主程序路径自动计算 UDF 为 {exe_dir}/{exe_name}.WebView2。
-        因此采用 Windows 目录联接 (junction) 方式：
-          默认UDF路径 ──junction──→ APP_DIR/data/cstimer_webview2/
 
+        Python 运行时: python.WebView2
+        exe 运行时:    AI_CFOP.WebView2
+        不同运行方式的默认 UDF 不同，导致数据分散。
+
+        解决方案：使用 Windows 目录联接 (junction) 将所有可能的默认 UDF
+        都重定向到同一个统一数据目录：
+          {项目根目录}/data/cstimer_webview2/
+
+        这样无论用 Python 还是 exe（任何副本）运行，csTimer 数据都在同一位置。
         Junction 对应用透明，无需管理员权限。
         """
         default_udf = self._get_webview2_default_udf()
-        target_udf = os.path.join(APP_DIR, "data", "cstimer_webview2")
+
+        # 统一数据目录：始终使用项目根目录下的 data/cstimer_webview2
+        # Python 模式: gui.py 所在目录 = 项目根目录
+        # exe 模式: APP_DIR = exe 所在目录（由 config.py 定义）
+        # 两者都指向应用的实际运行目录
+        project_root = APP_DIR
+        target_udf = os.path.join(project_root, "data", "cstimer_webview2")
+
+        # 如果默认 UDF 已经是目标目录本身（不太可能，但做防御），无需操作
+        if os.path.normcase(default_udf) == os.path.normcase(target_udf):
+            return True
 
         # 已经是联接且指向正确目标，无需操作
         if os.path.isdir(default_udf) and self._is_junction(default_udf):
@@ -1647,8 +1878,16 @@ class CFOPAnalyzerGUI:
                     if log:
                         log.debug(f"csTimer UDF 联接已存在: {default_udf} → {target_udf}")
                     return True
-            except Exception:
-                pass
+                else:
+                    # 联接指向错误目标，需要删除重建
+                    import subprocess
+                    subprocess.run(["cmd", "/c", "rmdir", default_udf],
+                                   capture_output=True, timeout=10)
+                    if log:
+                        log.debug(f"csTimer UDF 联接指向错误目标，已删除: {default_udf}")
+            except Exception as e:
+                if log:
+                    log.warning(f"csTimer UDF 联接检查失败: {e}")
 
         # 确保目标目录存在
         os.makedirs(target_udf, exist_ok=True)
@@ -2233,6 +2472,8 @@ class CFOPAnalyzerGUI:
                               highlightthickness=1, highlightbackground=THEME["border"])
         btn_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
 
+        ttk.Button(btn_frame, text="🔄 同步csTimer数据", command=self._sync_cstimer_data,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="📂 导入csTimer数据", command=self._import_cstimer,
                    style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(btn_frame, text="📥 导入CSV", command=self._import_csv,
