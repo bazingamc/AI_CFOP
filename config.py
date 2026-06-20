@@ -18,6 +18,10 @@ def get_app_dir():
 
 
 APP_DIR = get_app_dir()
+
+# 应用版本号（唯一版本源，其他位置均从此读取）
+APP_VERSION = "1.4.0"
+
 CONFIG_FILE = os.path.join(APP_DIR, ".cfop_config.json")
 LOG_DIR = os.path.join(APP_DIR, "logs")
 RESULT_DIR = os.path.join(APP_DIR, "results")

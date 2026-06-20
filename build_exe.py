@@ -1,8 +1,9 @@
 """
 AI_CFOP - EXE打包 & 安装包构建脚本
 使用方法:
-- python build_exe.py — 仅打包 EXE（原有功能不变）
-- python build_exe.py --installer — 打包 EXE + 构建安装包
+- python build_exe.py — 打包 EXE + 构建安装包（默认）
+- python build_exe.py --exe-only — 仅打包 EXE
+- python build_exe.py --installer-only — 仅构建安装包（跳过EXE打包）
 """
 
 import os
@@ -232,14 +233,33 @@ def build_exe():
     
     return True
 
-def get_version_from_iss():
-    """从 installer.iss 读取版本号"""
+def get_version():
+    """从 config.py 读取版本号（唯一版本源）"""
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.py")
+    with open(config_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    m = re.search(r'APP_VERSION\s*=\s*"([^"]+)"', content)
+    if m:
+        return m.group(1)
+    print("✗ 无法从 config.py 读取 APP_VERSION")
+    return None
+
+def update_iss_version(version):
+    """将版本号写入 installer.iss"""
     if not os.path.isfile(ISS_FILE):
-        return None
+        print(f"✗ 未找到 {ISS_FILE}")
+        return False
     with open(ISS_FILE, "r", encoding="utf-8") as f:
         content = f.read()
-    m = re.search(r'#define\s+MyAppVersion\s+"([^"]+)"', content)
-    return m.group(1) if m else None
+    content = re.sub(
+        r'#define\s+MyAppVersion\s+"[^"]*"',
+        f'#define MyAppVersion "{version}"',
+        content
+    )
+    with open(ISS_FILE, "w", encoding="utf-8") as f:
+        f.write(content)
+    print(f"✓ installer.iss 版本号已更新为 {version}")
+    return True
 
 def find_inno_setup():
     """查找 Inno Setup 编译器路径"""
@@ -337,7 +357,7 @@ def build_installer():
     result = subprocess.run(cmd)
 
     if result.returncode == 0:
-        version = get_version_from_iss() or "unknown"
+        version = get_version() or "unknown"
         installer_name = f"AI_CFOP_Setup_{version}.exe"
         installer_path = os.path.join(INSTALLER_OUTPUT_DIR, installer_name)
 
@@ -367,13 +387,21 @@ def build_installer():
 
 def main():
     parser = argparse.ArgumentParser(description=f"{APP_NAME} - 打包工具")
-    parser.add_argument("--installer", action="store_true", help="打包EXE后构建安装包")
+    parser.add_argument("--exe-only", action="store_true", help="仅打包EXE，不构建安装包")
     parser.add_argument("--installer-only", action="store_true", help="仅构建安装包（跳过EXE打包）")
     args = parser.parse_args()
 
     print(f"\n{'='*50}")
     print(f"  {APP_NAME} - 打包工具")
     print(f"{'='*50}\n")
+
+    # 从 config.py 读取版本号并同步到 installer.iss
+    version = get_version()
+    if version:
+        print(f"✓ 当前版本: {version}")
+        update_iss_version(version)
+    else:
+        print("⚠ 无法读取版本号，installer.iss 版本号未更新")
 
     if args.installer_only:
         # 仅构建安装包
@@ -394,10 +422,8 @@ def main():
     clean_build()
 
     if build_exe():
-        print("\n打包完成!")
-
-        # 如果指定了 --installer，继续构建安装包
-        if args.installer:
+        # 默认继续构建安装包，除非指定 --exe-only
+        if not args.exe_only:
             if build_installer():
                 print("\n全部完成! (EXE打包 + 安装包构建)")
             else:

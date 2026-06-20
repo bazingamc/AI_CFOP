@@ -122,3 +122,28 @@ function InitializeUninstall: Boolean;
 begin
   Result := True;
 end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  UDFPath: string;
+  ResultCode: Integer;
+begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    // 清理 WebView2 用户数据目录的 junction（%APPDATA%\AI_CFOP.exe）
+    // 如果是 junction 则删除（指向已卸载目录的悬空链接），
+    // 如果是真实目录则保留（可能包含独立的 csTimer 数据）
+    UDFPath := ExpandConstant('{userappdata}\AI_CFOP.exe');
+    if DirExists(UDFPath) then
+    begin
+      // fsutil reparsepoint query 对 junction/符号链接返回 0，对普通目录返回非 0
+      Exec('fsutil', 'reparsepoint query "' + UDFPath + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      if ResultCode = 0 then
+      begin
+        // 是 junction，删除它（卸载后目标已不存在，变成悬空链接）
+        Exec('cmd', '/c rmdir "' + UDFPath + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      end;
+      // 如果是真实目录，保留不动
+    end;
+  end;
+end;

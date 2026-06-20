@@ -16,7 +16,7 @@ from config import (
     THEME, HELP_TEXTS, PHASE_COLORS, PHASE_LABELS,
     ORIENTATION_OPTIONS, PHASE_ORDER,
     BOTTOM_COLOR_NAMES, BOTTOM_COLOR_OPTIONS, OPPOSITE_COLORS, COLOR_NAMES,
-    RESULT_DIR, SILICONFLOW_BASE_URL, APP_DIR,
+    RESULT_DIR, SILICONFLOW_BASE_URL, APP_DIR, APP_VERSION,
     OLL_ALGORITHMS, PLL_ALGORITHMS, OP_ALGO_CONFIG_FILE
 )
 
@@ -69,8 +69,8 @@ class CFOPAnalyzerGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("AI_CFOP V1.4")
-        self.root.geometry("960x980")
+        self.root.title(f"AI_CFOP V{APP_VERSION}")
+        self.root.geometry("1056x980")
         self.root.resizable(True, True)
         self.root.configure(bg=THEME["bg"])
         self._stream_stop = False
@@ -1842,13 +1842,21 @@ class CFOPAnalyzerGUI:
 
     @staticmethod
     def _is_junction(path):
-        """判断路径是否为目录联接 (junction / reparse point)"""
+        """
+        判断路径是否为目录联接 (junction / reparse point)。
+
+        使用 GetFileAttributesW 而非 os.path.isdir，因为 os.path.isdir
+        对悬空 junction（目标已删除）返回 False，而 GetFileAttributesW
+        仍能正确返回 FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY。
+        """
         import ctypes
-        if not os.path.isdir(path):
-            return False
+        ctypes.windll.kernel32.GetFileAttributesW.restype = ctypes.c_ulong
         attrs = ctypes.windll.kernel32.GetFileAttributesW(path)
+        if attrs == 0xFFFFFFFF:  # INVALID_FILE_ATTRIBUTES
+            return False
         # FILE_ATTRIBUTE_REPARSE_POINT = 0x0400
-        return bool(attrs & 0x0400)
+        # FILE_ATTRIBUTE_DIRECTORY = 0x0010
+        return bool(attrs & 0x0410 == 0x0410)
 
     def _setup_cstimer_data_dir(self):
         """
@@ -1861,6 +1869,9 @@ class CFOPAnalyzerGUI:
         APP_DIR/data/cstimer_webview2（每个副本的 APP_DIR 不同，数据独立）。
 
         Python 版本的 UDF 是 %APPDATA%\\python.exe，与 exe 不同，天然隔离。
+
+        注意：卸载重装后，旧 junction 可能指向已删除的目标（悬空链接），
+        需要检测并修复。
         """
         default_udf = self._get_webview2_default_udf()
         if not default_udf:
@@ -1874,21 +1885,26 @@ class CFOPAnalyzerGUI:
         if os.path.normcase(default_udf) == os.path.normcase(target_udf):
             return True
 
-        # 已经是联接且指向正确目标，无需操作
-        if os.path.isdir(default_udf) and self._is_junction(default_udf):
+        # 检测并处理已有 junction（包括悬空链接）
+        if self._is_junction(default_udf):
             try:
                 real_target = os.path.realpath(default_udf)
-                if os.path.normcase(real_target) == os.path.normcase(os.path.realpath(target_udf)):
+                target_ok = os.path.isdir(real_target) and os.path.exists(real_target)
+                if (target_ok and
+                        os.path.normcase(real_target) == os.path.normcase(os.path.realpath(target_udf))):
                     if log:
                         log.debug(f"csTimer UDF 联接已存在: {default_udf} → {target_udf}")
+                    # 目标正确且存在，确保 target_udf 目录存在
+                    os.makedirs(target_udf, exist_ok=True)
                     return True
                 else:
-                    # 联接指向错误目标，需要删除重建
+                    # 联接指向错误目标，或目标已不存在（悬空链接），删除重建
                     import subprocess
                     subprocess.run(["cmd", "/c", "rmdir", default_udf],
                                    capture_output=True, timeout=10)
+                    reason = "目标已不存在（悬空链接）" if not target_ok else "指向错误目标"
                     if log:
-                        log.debug(f"csTimer UDF 联接指向错误目标，已删除: {default_udf}")
+                        log.debug(f"csTimer UDF 联接{reason}，已删除: {default_udf}")
             except Exception as e:
                 if log:
                     log.warning(f"csTimer UDF 联接检查失败: {e}")
@@ -2476,20 +2492,26 @@ class CFOPAnalyzerGUI:
                               highlightthickness=1, highlightbackground=THEME["border"])
         btn_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
 
-        ttk.Button(btn_frame, text="🔄 同步csTimer数据", command=self._sync_cstimer_data,
-                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="📂 导入csTimer数据", command=self._import_cstimer,
-                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="📥 导入CSV", command=self._import_csv,
-                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="📊 导出CSV", command=self._export_memory,
-                   style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(btn_frame, text="🗑 清除数据", command=self._clear_memory,
-                   style="Danger.TButton").pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="🔄 csTimer同步", command=self._sync_cstimer_data,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(btn_frame, text="📂 csTimer导入", command=self._import_cstimer,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 4))
 
-        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
+        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
 
-        self._data_analyze_btn = ttk.Button(btn_frame, text="🔬 分析选中项（支持多选）", command=self._data_to_analysis,
+        ttk.Button(btn_frame, text="📥 CSV导入", command=self._import_csv,
+                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(btn_frame, text="📊 CSV导出", command=self._export_memory,
+                   style="Secondary.TButton").pack(side=tk.LEFT, padx=(0, 4))
+
+        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+
+        ttk.Button(btn_frame, text="🗑 清除", command=self._clear_memory,
+                   style="Danger.TButton").pack(side=tk.LEFT, padx=(0, 4))
+
+        ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+
+        self._data_analyze_btn = ttk.Button(btn_frame, text="🔬 分析选中项", command=self._data_to_analysis,
                                              style="Accent.TButton")
         self._data_analyze_btn.pack(side=tk.LEFT, padx=(0, 8))
 
