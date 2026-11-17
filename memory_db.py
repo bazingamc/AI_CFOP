@@ -460,6 +460,40 @@ def get_record_count_by_period(days: Optional[int] = None) -> int:
     return count
 
 
+def get_daily_time_avg(days: int = 90) -> List[Dict]:
+    """获取每日平均用时，用于绘制趋势曲线
+
+    返回列表，每项包含 date(日期字符串) 和 avg_time(当日截尾均值用时)。
+    仅包含有记录的日期，无记录的日期不返回。
+    """
+    conn = _get_conn()
+    c = conn.cursor()
+    uid = _current_user_id if _current_user_id else 0
+    since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+    cond = " AND processed_solve IS NOT NULL AND processed_solve != ''"
+    c.execute(
+        f"SELECT date, total_time FROM records WHERE user_id = ? AND date >= ?{cond} ORDER BY date ASC",
+        (uid, since)
+    )
+    rows = c.fetchall()
+    conn.close()
+
+    # 按日期分组
+    from collections import defaultdict
+    daily = defaultdict(list)
+    for row in rows:
+        date_str = row[0][:10] if row[0] else ""
+        if date_str and row[1] is not None:
+            daily[date_str].append(row[1])
+
+    result = []
+    for date_str in sorted(daily.keys()):
+        values = daily[date_str]
+        if values:
+            result.append({"date": date_str, "avg_time": round(_trimmed_mean(values), 2)})
+    return result
+
+
 def find_record_id(scramble: str, solution: str, total_time: float) -> Optional[int]:
     """根据打乱公式、还原步骤和总用时查找已有记录ID"""
     conn = _get_conn()

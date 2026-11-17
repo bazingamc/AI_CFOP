@@ -1860,13 +1860,13 @@ class CFOPAnalyzerGUI:
 
     def _setup_cstimer_data_dir(self):
         """
-        将 WebView2 用户数据目录重定向到应用独立的数据目录。
+        将 WebView2 用户数据目录重定向到可写的数据目录。
 
         webview C 库使用 %APPDATA%\\{exe_name} 作为 UDF。
         所有 exe 副本的可执行文件名都是 AI_CFOP.exe，导致共享同一个 UDF。
 
         解决方案：在 %APPDATA%\\{exe_name} 创建 junction，重定向到
-        APP_DIR/data/cstimer_webview2（每个副本的 APP_DIR 不同，数据独立）。
+        %LOCALAPPDATA%\\AI_CFOP\\cstimer_webview2（始终可写）。
 
         Python 版本的 UDF 是 %APPDATA%\\python.exe，与 exe 不同，天然隔离。
 
@@ -1879,7 +1879,14 @@ class CFOPAnalyzerGUI:
                 log.warning("csTimer UDF: 无法获取 APPDATA 环境变量")
             return False
 
-        target_udf = os.path.join(APP_DIR, "data", "cstimer_webview2")
+        # 使用 %LOCALAPPDATA%\AI_CFOP\cstimer_webview2 作为目标（始终可写）
+        # 不使用 APP_DIR/data/cstimer_webview2，因为 APP_DIR 可能在 Program Files 下不可写
+        local_appdata = os.environ.get("LOCALAPPDATA", "")
+        if not local_appdata:
+            if log:
+                log.warning("csTimer UDF: 无法获取 LOCALAPPDATA 环境变量")
+            return False
+        target_udf = os.path.join(local_appdata, "AI_CFOP", "cstimer_webview2")
 
         # 如果默认 UDF 已经是目标目录本身，无需操作
         if os.path.normcase(default_udf) == os.path.normcase(target_udf):
@@ -1898,11 +1905,29 @@ class CFOPAnalyzerGUI:
                     os.makedirs(target_udf, exist_ok=True)
                     return True
                 else:
-                    # 联接指向错误目标，或目标已不存在（悬空链接），删除重建
+                    # 联接指向旧目标或目标已不存在（悬空链接），删除重建
+                    # 如果旧目标有数据，先迁移到新目标
+                    if target_ok and os.path.isdir(real_target):
+                        try:
+                            import shutil
+                            os.makedirs(target_udf, exist_ok=True)
+                            for item in os.listdir(real_target):
+                                src = os.path.join(real_target, item)
+                                dst = os.path.join(target_udf, item)
+                                if not os.path.exists(dst):
+                                    if os.path.isdir(src):
+                                        shutil.copytree(src, dst)
+                                    else:
+                                        shutil.copy2(src, dst)
+                            if log:
+                                log.debug(f"csTimer UDF 数据已从旧目标迁移: {real_target} → {target_udf}")
+                        except Exception as e:
+                            if log:
+                                log.warning(f"csTimer UDF 旧目标数据迁移失败: {e}")
                     import subprocess
                     subprocess.run(["cmd", "/c", "rmdir", default_udf],
                                    capture_output=True, timeout=10)
-                    reason = "目标已不存在（悬空链接）" if not target_ok else "指向错误目标"
+                    reason = "目标已不存在（悬空链接）" if not target_ok else "指向旧目标，已迁移数据"
                     if log:
                         log.debug(f"csTimer UDF 联接{reason}，已删除: {default_udf}")
             except Exception as e:
@@ -1962,7 +1987,7 @@ class CFOPAnalyzerGUI:
         """首次进入 csTimer 标签页时，创建 WebView2 控件并加载页面"""
         self._cstimer_initialized = True
 
-        # 将 WebView2 用户数据目录重定向到 APP_DIR/data/cstimer_webview2/
+        # 将 WebView2 用户数据目录重定向到 %LOCALAPPDATA%\AI_CFOP\cstimer_webview2/
         self._setup_cstimer_data_dir()
 
         # 在创建 WebView2 之前注入 Web Bluetooth 所需的浏览器参数
@@ -2176,32 +2201,35 @@ class CFOPAnalyzerGUI:
                                    highlightthickness=1, highlightbackground=THEME["border"])
             trend_card.pack(fill=tk.X)
 
+            # 左右布局：表格固定宽度 + 曲线图自适应
+            table_frame = tk.Frame(trend_card, bg=THEME["card_bg"])
+            table_frame.pack(side=tk.LEFT, fill=tk.Y)
+
+            chart_frame = tk.Frame(trend_card, bg=THEME["card_bg"])
+            chart_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(16, 0))
+
             # 使用grid布局保证对齐
             headers = ["时段", "记录数", "用时", "变化", "步数", "TPS"]
             header_anchors = ["w", "e", "e", "e", "e", "w"]
             for col, (h, a) in enumerate(zip(headers, header_anchors)):
-                trend_card.columnconfigure(col, weight=0, minsize=10)
-                tk.Label(trend_card, text=h, font=("Microsoft YaHei", 9, "bold"),
+                table_frame.columnconfigure(col, weight=0, minsize=10)
+                tk.Label(table_frame, text=h, font=("Microsoft YaHei", 9, "bold"),
                          bg=THEME["card_bg"], fg=THEME["fg"], anchor=a
                          ).grid(row=0, column=col, padx=(8, 4), pady=(0, 4), sticky="w" if a == "w" else "e")
-            # 空列撑满右侧留白
-            trend_card.columnconfigure(len(headers), weight=1)
-            tk.Label(trend_card, text="", bg=THEME["card_bg"]
-                     ).grid(row=0, column=len(headers), sticky="ew")
 
-            sep_frame = tk.Frame(trend_card, bg=THEME["border"], height=1)
+            sep_frame = tk.Frame(table_frame, bg=THEME["border"], height=1)
             sep_frame.grid(row=1, column=0, columnspan=len(headers), sticky="ew", pady=2)
 
             for row_idx, (period_label, t_avg, s_avg, tps_avg, cnt) in enumerate(trend_data, start=2):
-                tk.Label(trend_card, text=period_label, font=("Microsoft YaHei", 9),
+                tk.Label(table_frame, text=period_label, font=("Microsoft YaHei", 9),
                          bg=THEME["card_bg"], fg=THEME["fg"], anchor="w"
                          ).grid(row=row_idx, column=0, padx=(8, 4), pady=1, sticky="w")
 
-                tk.Label(trend_card, text=str(cnt), font=("Microsoft YaHei", 9),
+                tk.Label(table_frame, text=str(cnt), font=("Microsoft YaHei", 9),
                          bg=THEME["card_bg"], fg=THEME["fg"], anchor="e"
                          ).grid(row=row_idx, column=1, padx=(4, 6), pady=1, sticky="e")
 
-                tk.Label(trend_card, text=f"{t_avg:.2f}s", font=("Microsoft YaHei", 9),
+                tk.Label(table_frame, text=f"{t_avg:.2f}s", font=("Microsoft YaHei", 9),
                          bg=THEME["card_bg"], fg=THEME["fg"], anchor="e"
                          ).grid(row=row_idx, column=2, padx=(4, 6), pady=1, sticky="e")
 
@@ -2214,27 +2242,188 @@ class CFOPAnalyzerGUI:
                         arrow = "↑" if diff < 0 else "↓"
                         arrow_fg = "#e74c3c" if diff < 0 else "#27ae60"
                         diff_str = f"{arrow} {abs(diff):.2f}s"
-                        tk.Label(trend_card, text=diff_str, font=("Microsoft YaHei", 9),
+                        tk.Label(table_frame, text=diff_str, font=("Microsoft YaHei", 9),
                                  bg=THEME["card_bg"], fg=arrow_fg, anchor="e"
                                  ).grid(row=row_idx, column=3, padx=(4, 6), pady=1, sticky="e")
                     else:
-                        tk.Label(trend_card, text="--", font=("Microsoft YaHei", 9),
+                        tk.Label(table_frame, text="--", font=("Microsoft YaHei", 9),
                                  bg=THEME["card_bg"], fg="#999999", anchor="e"
                                  ).grid(row=row_idx, column=3, padx=(4, 6), pady=1, sticky="e")
                 else:
-                    tk.Label(trend_card, text="--", font=("Microsoft YaHei", 9),
+                    tk.Label(table_frame, text="--", font=("Microsoft YaHei", 9),
                              bg=THEME["card_bg"], fg="#999999", anchor="e"
                              ).grid(row=row_idx, column=3, padx=(4, 6), pady=1, sticky="e")
 
                 steps_str = f"{s_avg:.1f}" if s_avg else "--"
-                tk.Label(trend_card, text=steps_str, font=("Microsoft YaHei", 9),
+                tk.Label(table_frame, text=steps_str, font=("Microsoft YaHei", 9),
                          bg=THEME["card_bg"], fg=THEME["fg"], anchor="e"
                          ).grid(row=row_idx, column=4, padx=(4, 6), pady=1, sticky="e")
 
                 tps_str = f"{tps_avg:.1f}" if tps_avg else "--"
-                tk.Label(trend_card, text=tps_str, font=("Microsoft YaHei", 9),
+                tk.Label(table_frame, text=tps_str, font=("Microsoft YaHei", 9),
                          bg=THEME["card_bg"], fg=THEME["fg"], anchor="w"
                          ).grid(row=row_idx, column=5, padx=(4, 6), pady=1, sticky="w")
+
+            # ═══ 右侧：7天滑动平均用时曲线图 ═══
+            daily_data = memory_db.get_daily_time_avg(days=90)
+            if daily_data:
+                # 计算7天滑动平均
+                ma_window = 7
+                ma_data = []
+                for i in range(len(daily_data)):
+                    start = max(0, i - ma_window + 1)
+                    window_values = [d["avg_time"] for d in daily_data[start:i + 1]]
+                    ma_data.append({
+                        "date": daily_data[i]["date"],
+                        "ma": round(sum(window_values) / len(window_values), 2)
+                    })
+
+                chart_label = tk.Label(chart_frame, text="7天滑动平均用时", font=("Microsoft YaHei", 9, "bold"),
+                                       bg=THEME["card_bg"], fg=THEME["fg"])
+                chart_label.pack(anchor="w", pady=(0, 2))
+
+                chart_canvas = tk.Canvas(chart_frame, height=120, bg=THEME["card_bg"],
+                                         highlightthickness=1, highlightbackground=THEME["border"])
+                chart_canvas.pack(fill=tk.BOTH, expand=True)
+
+                # tooltip
+                chart_tooltip_win = [None]
+                chart_tooltip_text = [None]
+                chart_point_rects = []  # [(x, y, text), ...]
+
+                def _show_chart_tooltip(event, text):
+                    if chart_tooltip_text[0] == text and chart_tooltip_win[0]:
+                        chart_tooltip_win[0].wm_geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
+                        return
+                    _hide_chart_tooltip()
+                    tw = tk.Toplevel(chart_canvas)
+                    tw.wm_overrideredirect(True)
+                    tw.wm_attributes("-topmost", True)
+                    tw.wm_geometry(f"+{event.x_root + 12}+{event.y_root + 8}")
+                    lbl = tk.Label(tw, text=text, font=("Microsoft YaHei", 9),
+                                   bg="#ffffdd", fg="#333333", relief="solid", borderwidth=1,
+                                   padx=6, pady=4, justify="left")
+                    lbl.pack()
+                    chart_tooltip_win[0] = tw
+                    chart_tooltip_text[0] = text
+
+                def _hide_chart_tooltip():
+                    if chart_tooltip_win[0]:
+                        chart_tooltip_win[0].destroy()
+                        chart_tooltip_win[0] = None
+                    chart_tooltip_text[0] = None
+
+                def _draw_chart(event=None):
+                    chart_canvas.delete("all")
+                    chart_point_rects.clear()
+
+                    w = chart_canvas.winfo_width()
+                    h = chart_canvas.winfo_height()
+                    if w < 50 or h < 50:
+                        return
+
+                    pad_left, pad_right, pad_top, pad_bottom = 40, 12, 12, 22
+                    plot_w = w - pad_left - pad_right
+                    plot_h = h - pad_top - pad_bottom
+                    if plot_w <= 0 or plot_h <= 0:
+                        return
+
+                    values = [d["ma"] for d in ma_data]
+                    dates = [d["date"] for d in ma_data]
+                    n = len(values)
+                    if n < 2:
+                        chart_canvas.create_text(w / 2, h / 2, text="数据不足",
+                                                 font=("Microsoft YaHei", 9), fill="#999999")
+                        return
+
+                    v_min = min(values)
+                    v_max = max(values)
+                    v_range = v_max - v_min
+                    if v_range < 0.01:
+                        v_range = 1.0
+                        v_min = v_min - 0.5
+
+                    # 绘制Y轴刻度
+                    import math
+                    nice_step = 10 ** math.floor(math.log10(v_range)) if v_range > 0 else 1
+                    if v_range / nice_step > 5:
+                        nice_step *= 2
+                    elif v_range / nice_step < 2:
+                        nice_step /= 2
+
+                    y_start = math.floor(v_min / nice_step) * nice_step
+                    y_end = math.ceil(v_max / nice_step) * nice_step
+                    if y_end <= y_start:
+                        y_end = y_start + nice_step
+
+                    y_val = y_start
+                    while y_val <= y_end + 0.001:
+                        py = pad_top + plot_h - (y_val - v_min) / (y_end - v_min) * plot_h
+                        if pad_top <= py <= pad_top + plot_h:
+                            chart_canvas.create_line(pad_left, py, pad_left + plot_w, py,
+                                                     fill=THEME["border"], width=1, dash=(2, 3))
+                            chart_canvas.create_text(pad_left - 4, py, text=f"{y_val:.1f}",
+                                                     anchor="e", font=("Microsoft YaHei", 8), fill="#999999")
+                        y_val += nice_step
+
+                    # 绘制X轴日期标签
+                    x_label_count = min(6, n)
+                    x_step = max(1, (n - 1) // x_label_count)
+                    for i in range(0, n, x_step):
+                        px = pad_left + i / (n - 1) * plot_w
+                        date_label = dates[i][5:]  # MM-DD
+                        chart_canvas.create_text(px, pad_top + plot_h + 12, text=date_label,
+                                                 anchor="center", font=("Microsoft YaHei", 7), fill="#999999")
+
+                    # 绘制曲线
+                    points = []
+                    for i in range(n):
+                        px = pad_left + i / (n - 1) * plot_w
+                        py = pad_top + plot_h - (values[i] - v_min) / (y_end - v_min) * plot_h
+                        points.append((px, py))
+                        chart_point_rects.append((px - 4, py - 4, px + 4, py + 4,
+                                                  f"{dates[i]}\n{values[i]:.2f}s"))
+
+                    # 绘制填充区域
+                    fill_coords = []
+                    for px, py in points:
+                        fill_coords.extend([px, py])
+                    fill_coords.extend([points[-1][0], pad_top + plot_h, points[0][0], pad_top + plot_h])
+                    if len(fill_coords) >= 6:
+                        chart_canvas.create_polygon(fill_coords, fill="#6c5ce7", outline="",
+                                                    stipple="gray25")
+
+                    # 绘制折线
+                    line_coords = []
+                    for px, py in points:
+                        line_coords.extend([px, py])
+                    if len(line_coords) >= 4:
+                        chart_canvas.create_line(line_coords, fill=THEME["accent"], width=2, smooth=True)
+
+                    # 绘制数据点
+                    for px, py in points:
+                        chart_canvas.create_oval(px - 2, py - 2, px + 2, py + 2,
+                                                 fill=THEME["accent"], outline="")
+
+                    # Y轴标签
+                    chart_canvas.create_text(4, pad_top, text="秒", anchor="nw",
+                                             font=("Microsoft YaHei", 7), fill="#999999")
+
+                chart_canvas.bind("<Configure>", _draw_chart)
+
+                def _on_chart_motion(event):
+                    x, y = event.x, event.y
+                    for rx1, ry1, rx2, ry2, text in chart_point_rects:
+                        if rx1 <= x <= rx2 and ry1 <= y <= ry2:
+                            _show_chart_tooltip(event, text)
+                            return
+                    _hide_chart_tooltip()
+
+                def _on_chart_leave(event):
+                    _hide_chart_tooltip()
+
+                chart_canvas.bind("<Motion>", _on_chart_motion)
+                chart_canvas.bind("<Leave>", _on_chart_leave)
 
         # ═══ 第四行：优缺点标签 ═══
         tag_stats = memory_db.get_tag_stats()
