@@ -4,6 +4,12 @@
   <strong>内嵌 csTimer 计时器 · AI 深度分析还原过程 · 精准定位瓶颈 · 专业训练建议</strong>
 </p>
 
+## AI_CFOP 正式版已上线
+
+AI_CFOP 正式版支持 **Windows、macOS、Android 和 iOS**，集 **AI 解法教学、3D 动画复盘、公式跟练与训练统计**于一体，帮助你分析还原过程、开展针对性训练。
+
+**前往官网了解完整功能并下载体验 [www.aicfop.com](https://www.aicfop.com)**
+
 ***
 
 ## 项目简介
